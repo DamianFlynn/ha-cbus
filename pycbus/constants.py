@@ -11,7 +11,7 @@ reference documents:
 - *Chapter 08 — Enable Control*  — binary enable/disable model
 
 Note on application IDs:
-    C-Bus reserves IDs 0–255.  Each application gets a unique ID that appears
+    C-Bus reserves IDs 0-255.  Each application gets a unique ID that appears
     as the second byte of every point-to-multipoint SAL command.  The full
     allocation table is in *Chapter 00*, Table 2.
 
@@ -86,7 +86,7 @@ class LightingCommand(IntEnum):
 
         05 38 00 <opcode> <group> <level> <checksum>
               ^^           ^^^^^^
-              app 56       target group address (0–255)
+              app 56       target group address (0-255)
 
     - ``OFF``  (0x01): sets the group to 0x00 immediately.
     - ``ON``   (0x79): sets the group to 0xFF immediately.
@@ -200,7 +200,7 @@ class InterfaceOption3(IntEnum):
         LOCAL_SAL — echo locally-generated SAL back to the host.
         PUN       — power-up notification on boot.
         EXSTAT    — extended status replies (two bytes per group address
-                    instead of one, giving 0–255 resolution).
+                    instead of one, giving 0-255 resolution).
 
     Reference: *C-Bus Serial Interface User Guide*, §7.2 Table 7-3.
     """

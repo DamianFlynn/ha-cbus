@@ -3,10 +3,10 @@
 C-Bus is organised in a strict hierarchy::
 
     Project
-    └── Network  (0–255, usually just network 254)
+    └── Network  (0-255, usually just network 254)
         ├── Application  (identified by app ID, e.g. 56 = Lighting)
-        │   └── Group  (0–255, each group is a logical load or scene)
-        └── Unit  (0–255, each unit is a physical device on the bus)
+        │   └── Group  (0-255, each group is a logical load or scene)
+        └── Unit  (0-255, each unit is a physical device on the bus)
 
 A *project* is the top-level container exported by C-Gate / Toolkit.
 A *network* represents one physical C-Bus cable run (some installations
@@ -18,7 +18,7 @@ A *unit* is a physical device (dimmer, relay, keypad) that responds to
 commands on one or more groups.
 
 Dataclass validation:
-    ``CbusGroup.__post_init__`` enforces the 0–255 range for group
+    ``CbusGroup.__post_init__`` enforces the 0-255 range for group
     addresses at construction time to catch configuration import errors
     early.
 
@@ -47,13 +47,13 @@ class CbusGroup:
     Lighting application, a group typically maps to a circuit or a scene.
 
     Attributes:
-        address:  The 8-bit group address (0–255).
+        address:  The 8-bit group address (0-255).
         name:     Human-readable label, populated from C-Gate XML import
                   or entered manually during config flow.  Empty string
                   when no import data is available.
 
     Raises:
-        ValueError: If *address* is outside the valid 0–255 range.
+        ValueError: If *address* is outside the valid 0-255 range.
     """
 
     address: int
@@ -61,7 +61,7 @@ class CbusGroup:
 
     def __post_init__(self) -> None:
         if not 0 <= self.address <= 255:
-            raise ValueError(f"Group address must be 0–255, got {self.address}")
+            raise ValueError(f"Group address must be 0-255, got {self.address}")
 
 
 @dataclass
@@ -69,7 +69,7 @@ class CbusUnit:
     """A physical C-Bus unit (dimmer, relay, keypad, sensor, etc.).
 
     Units are the hardware devices on the bus.  Each unit has a unique
-    address (0–255) within its network and may service one or more groups.
+    address (0-255) within its network and may service one or more groups.
 
     The ``groups`` list records which group addresses this unit controls.
     This mapping comes from the ``PP`` (parameter page) values in the
@@ -122,7 +122,7 @@ class CbusNetwork:
     default).  Larger sites may bridge multiple networks together.
 
     Attributes:
-        network_number:    The 8-bit network identifier (0–255).
+        network_number:    The 8-bit network identifier (0-255).
         name:              Human-readable name (e.g. "HOME").
         interface_type:    Connection method: ``"tcp"`` (CNI) or ``"serial"`` (PCI).
         interface_address: Host:port for TCP, or device path for serial.

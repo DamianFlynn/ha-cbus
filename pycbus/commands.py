@@ -16,8 +16,8 @@ Command structure (point-to-multipoint, broadcast)::
     Byte 1:  <app>    — Application ID (e.g. 0x38 = Lighting)
     Byte 2:  <net>    — Network number (0x00 = default)
     Byte 3:  <opcode> — SAL opcode (ON / OFF / RAMP_* / TERMINATE_RAMP)
-    Byte 4:  <group>  — Target group address (0–255)
-    Byte 5:  [level]  — Optional target level (0x00–0xFF), present for ON/RAMP
+    Byte 4:  <group>  — Target group address (0-255)
+    Byte 5:  [level]  — Optional target level (0x00-0xFF), present for ON/RAMP
     Byte 6:  <chk>    — Two's-complement checksum
 
 References:
@@ -50,7 +50,7 @@ def _build_pm_command(*payload_bytes: int) -> bytes:
     with ``\\`` prefix and ``\\r`` suffix before writing to the transport.
 
     Args:
-        *payload_bytes: Individual byte values (0–255) forming the
+        *payload_bytes: Individual byte values (0-255) forming the
             command payload *without* the checksum.
 
     Returns:
@@ -67,7 +67,7 @@ def lighting_on(group: int, network: int = 0) -> bytes:
     Immediately sets the target group to full brightness (level 0xFF).
 
     Args:
-        group:   Target group address (0–255).
+        group:   Target group address (0-255).
         network: C-Bus network number (default 0 = the connected network).
 
     Returns:
@@ -90,7 +90,7 @@ def lighting_off(group: int, network: int = 0) -> bytes:
     this is instantaneous with no fade.
 
     Args:
-        group:   Target group address (0–255).
+        group:   Target group address (0-255).
         network: C-Bus network number (default 0).
 
     Returns:
@@ -114,12 +114,12 @@ def lighting_ramp(
 ) -> bytes:
     """Build a Lighting RAMP command (group → level at rate).
 
-    Fades the target group to *level* (0–255) over the duration encoded
+    Fades the target group to *level* (0-255) over the duration encoded
     in *rate*.  Use :data:`pycbus.constants.RAMP_DURATIONS` to find the
     closest ramp opcode for an arbitrary duration in seconds.
 
     Args:
-        group:   Target group address (0–255).
+        group:   Target group address (0-255).
         level:   Target brightness (0x00 = off, 0xFF = full).
         rate:    Ramp-rate opcode (default: RAMP_INSTANT = 0s fade).
         network: C-Bus network number (default 0).
@@ -144,7 +144,7 @@ def lighting_terminate_ramp(group: int, network: int = 0) -> bytes:
     Useful for implementing a "stop" button during long fades.
 
     Args:
-        group:   Target group address (0–255).
+        group:   Target group address (0-255).
         network: C-Bus network number (default 0).
 
     Returns:

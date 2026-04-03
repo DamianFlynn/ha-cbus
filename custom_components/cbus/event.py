@@ -6,8 +6,8 @@ received by all units listening on that trigger group.  In Home Assistant,
 each trigger group maps to a :class:`homeassistant.components.event.EventEntity`.
 
 SAL structure:
-    - Trigger Group (0–255): identifies the trigger.
-    - Action Selector (0–255): identifies which action within the group.
+    - Trigger Group (0-255): identifies the trigger.
+    - Action Selector (0-255): identifies which action within the group.
 
 HA event data::
 

@@ -17,8 +17,8 @@ pycbus protocol layer.  Its responsibilities:
 Refresh model:
     This coordinator does **not** poll.  C-Bus is inherently push-based:
     the PCI/CNI sends monitor events for every SAL on the network.
-    The coordinator’s ``_async_update_data`` is a no-op; all state
-    changes flow through the protocol’s event callback.
+    The coordinator's ``_async_update_data`` is a no-op; all state
+    changes flow through the protocol's event callback.
 
 This is a stub — implementation follows the protocol layer.
 """

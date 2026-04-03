@@ -4,7 +4,7 @@ Verifies that the dataclass topology models enforce constraints
 correctly and handle edge cases in group/unit/network addressing.
 
 Covers:
-    - CbusGroup address range validation (0–255).
+    - CbusGroup address range validation (0-255).
     - CbusGroup boundary values (0 and 255).
     - CbusUnit default field values.
     - CbusApplication group dictionary operations.
@@ -29,7 +29,7 @@ class TestCbusGroup:
     """Tests for CbusGroup dataclass validation."""
 
     def test_valid_group_address(self) -> None:
-        """Group addresses 0–255 should be accepted."""
+        """Group addresses 0-255 should be accepted."""
         group = CbusGroup(address=100, name="Test Group")
         assert group.address == 100
         assert group.name == "Test Group"
@@ -46,12 +46,12 @@ class TestCbusGroup:
 
     def test_group_address_negative_rejected(self) -> None:
         """Negative addresses must be rejected."""
-        with pytest.raises(ValueError, match="0–255"):
+        with pytest.raises(ValueError, match="0-255"):
             CbusGroup(address=-1)
 
     def test_group_address_overflow_rejected(self) -> None:
         """Addresses above 255 must be rejected."""
-        with pytest.raises(ValueError, match="0–255"):
+        with pytest.raises(ValueError, match="0-255"):
             CbusGroup(address=256)
 
     def test_group_default_name_empty(self) -> None:

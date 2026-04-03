@@ -32,7 +32,7 @@ def checksum(data: bytes) -> int:
         data: The raw payload bytes *without* the checksum byte.
 
     Returns:
-        A single byte (0x00–0xFF) to append as the checksum.
+        A single byte (0x00-0xFF) to append as the checksum.
 
     Example::
 

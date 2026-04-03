@@ -16,7 +16,7 @@ Integration architecture::
 
 Versioning:
     The integration follows CalVer (YYYY.M.patch) to align with
-    Home Assistant’s release cadence.  The underlying pycbus library
+    Home Assistant's release cadence.  The underlying pycbus library
     uses SemVer independently.
 
 Setup entry points:

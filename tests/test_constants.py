@@ -16,14 +16,14 @@ from __future__ import annotations
 
 from pycbus.constants import (
     RAMP_DURATIONS,
+    SERIAL_BAUD,
+    TCP_PORT,
     ApplicationId,
     ConfirmationCode,
     InterfaceOption1,
     InterfaceOption3,
     LightingCommand,
     PointToMultipointDAT,
-    SERIAL_BAUD,
-    TCP_PORT,
 )
 
 
@@ -49,7 +49,7 @@ class TestApplicationId:
     def test_all_values_in_byte_range(self) -> None:
         """Every application ID must fit in a single byte."""
         for app in ApplicationId:
-            assert 0 <= app <= 255, f"{app.name} = {app} is outside 0–255"
+            assert 0 <= app <= 255, f"{app.name} = {app} is outside 0-255"
 
 
 class TestPointToMultipointDAT:
@@ -78,8 +78,7 @@ class TestLightingCommand:
     def test_all_ramp_opcodes_unique(self) -> None:
         """Every ramp opcode must have a unique value."""
         ramp_values = [
-            lc.value for lc in LightingCommand
-            if lc.name.startswith("RAMP_")
+            lc.value for lc in LightingCommand if lc.name.startswith("RAMP_")
         ]
         assert len(ramp_values) == len(set(ramp_values))
 
@@ -100,10 +99,7 @@ class TestRampDurations:
     def test_covers_all_ramp_opcodes(self) -> None:
         """Every RAMP_* opcode should appear in the duration table."""
         table_opcodes = {rate for _, rate in RAMP_DURATIONS}
-        ramp_opcodes = {
-            lc for lc in LightingCommand
-            if lc.name.startswith("RAMP_")
-        }
+        ramp_opcodes = {lc for lc in LightingCommand if lc.name.startswith("RAMP_")}
         assert ramp_opcodes == table_opcodes
 
     def test_max_duration_is_1020(self) -> None:
@@ -115,16 +111,16 @@ class TestConfirmationCode:
     """Verify PCI confirmation codes."""
 
     def test_positive_is_g(self) -> None:
-        assert ConfirmationCode.POSITIVE == ord("g")
+        assert ord("g") == ConfirmationCode.POSITIVE
 
     def test_negative_is_bang(self) -> None:
-        assert ConfirmationCode.NEGATIVE == ord("!")
+        assert ord("!") == ConfirmationCode.NEGATIVE
 
     def test_ready_is_hash(self) -> None:
-        assert ConfirmationCode.READY == ord("#")
+        assert ord("#") == ConfirmationCode.READY
 
     def test_busy_is_dot(self) -> None:
-        assert ConfirmationCode.BUSY == ord(".")
+        assert ord(".") == ConfirmationCode.BUSY
 
 
 class TestInterfaceOptions:

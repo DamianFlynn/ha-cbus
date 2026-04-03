@@ -3,7 +3,7 @@
 Each C-Bus lighting group maps to a :class:`homeassistant.components.light.LightEntity`.
 
 Supported features:
-    - **Brightness** (0–255): directly mapped from C-Bus level (0x00–0xFF).
+    - **Brightness** (0-255): directly mapped from C-Bus level (0x00-0xFF).
     - **Transition**: mapped to the closest C-Bus ramp rate using
       :data:`pycbus.constants.RAMP_DURATIONS`.
     - **Turn on / turn off**: uses SAL ON (0x79) and OFF (0x01) commands.

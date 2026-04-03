@@ -40,7 +40,9 @@ class TestCliBuild:
 
     def test_build_ramp_with_rate(self, capsys) -> None:  # type: ignore[no-untyped-def]
         """``build ramp --group 10 --level 128 --rate 4s`` should exit 0."""
-        exit_code = main(["build", "ramp", "--group", "10", "--level", "128", "--rate", "4s"])
+        exit_code = main(
+            ["build", "ramp", "--group", "10", "--level", "128", "--rate", "4s"]
+        )
         assert exit_code == 0
         output = capsys.readouterr().out
         assert "Lighting RAMP" in output
@@ -84,14 +86,18 @@ class TestCliChecksum:
     def test_verify_valid(self, capsys) -> None:  # type: ignore[no-untyped-def]
         """Verify a correct checksum returns exit code 0."""
         # 05 38 00 79 01 FF + checksum 4A
-        exit_code = main(["checksum", "--verify", "05", "38", "00", "79", "01", "FF", "4A"])
+        exit_code = main(
+            ["checksum", "--verify", "05", "38", "00", "79", "01", "FF", "4A"]
+        )
         assert exit_code == 0
         output = capsys.readouterr().out
         assert "YES" in output
 
     def test_verify_invalid(self, capsys) -> None:  # type: ignore[no-untyped-def]
         """Verify a bad checksum returns exit code 1."""
-        exit_code = main(["checksum", "--verify", "05", "38", "00", "79", "01", "FF", "00"])
+        exit_code = main(
+            ["checksum", "--verify", "05", "38", "00", "79", "01", "FF", "00"]
+        )
         assert exit_code == 1
         output = capsys.readouterr().out
         assert "NO" in output

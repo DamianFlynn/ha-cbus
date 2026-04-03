@@ -203,25 +203,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="Lighting action to build.",
     )
     build_parser.add_argument(
-        "--group", "-g",
+        "--group",
+        "-g",
         type=int,
         required=True,
-        help="Target group address (0–255).",
+        help="Target group address (0-255).",
     )
     build_parser.add_argument(
-        "--level", "-l",
+        "--level",
+        "-l",
         type=int,
         default=255,
-        help="Target brightness level for ramp commands (0–255, default: 255).",
+        help="Target brightness level for ramp commands (0-255, default: 255).",
     )
     build_parser.add_argument(
-        "--rate", "-r",
+        "--rate",
+        "-r",
         type=str,
         default=None,
         help="Ramp duration (e.g. '4s', '30s', '120s'). Nearest rate is chosen.",
     )
     build_parser.add_argument(
-        "--network", "-n",
+        "--network",
+        "-n",
         type=int,
         default=0,
         help="C-Bus network number (default: 0).",
@@ -238,7 +242,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Hex byte strings (e.g. '05 38 00 79 01 FF' or '0538007901FF').",
     )
     cs_parser.add_argument(
-        "--verify", "-v",
+        "--verify",
+        "-v",
         action="store_true",
         help="Verify the checksum instead of computing it.",
     )
@@ -291,10 +296,16 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "checksum":
         return cmd_checksum(args)
     elif args.command == "send":
-        print("send: not yet implemented — transport layer coming soon.", file=sys.stderr)
+        print(
+            "send: not yet implemented.",
+            file=sys.stderr,
+        )
         return 1
     elif args.command == "monitor":
-        print("monitor: not yet implemented — transport layer coming soon.", file=sys.stderr)
+        print(
+            "monitor: not yet implemented.",
+            file=sys.stderr,
+        )
         return 1
     else:
         parser.print_help()

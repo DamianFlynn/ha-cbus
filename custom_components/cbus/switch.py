@@ -1,7 +1,7 @@
 """Switch platform for C-Bus Enable Control application (app 203 / 0xCB).
 
 The Enable Control application provides simple binary on/off control for
-C-Bus groups that don’t need dimming.  Each group maps to a
+C-Bus groups that don't need dimming.  Each group maps to a
 :class:`homeassistant.components.switch.SwitchEntity`.
 
 SAL commands:
