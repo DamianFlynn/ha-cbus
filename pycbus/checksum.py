@@ -5,7 +5,7 @@ before the carriage-return terminator.  The algorithm is the *two's
 complement* of the sum of all preceding bytes, masked to 8 bits.
 
 Reference: *C-Bus Serial Interface User Guide*, §4.2.2 — Checksum
-    "The checksum is the two_s complement of the sum of all bytes
+    "The checksum is the two's complement of the sum of all bytes
      in the message excluding the leading backslash and trailing
      carriage return."
 

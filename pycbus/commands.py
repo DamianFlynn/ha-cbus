@@ -31,7 +31,7 @@ Usage::
     >>> lighting_on(group=1).hex()
     '0538007901ff50'
     >>> lighting_ramp(group=5, level=128, rate=LightingCommand.RAMP_4S).hex()
-    '05380009058084'
+    '0538000a058034'
 """
 
 from __future__ import annotations

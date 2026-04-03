@@ -51,7 +51,7 @@ class ApplicationId(IntEnum):
     CLOCK = 223  # 0xDF — Chapter 23
     TELEPHONY = 224  # 0xE0 — Chapter 24
     AIR_CONDITIONING = 172  # 0xAC — Chapter 25
-    IRRIGATION = 203  # 0xCB — Chapter 26 (shares enable block)
+    IRRIGATION = ENABLE  # 0xCB - Chapter 26 (alias: shares Enable block)
     MEASUREMENT = 232  # 0xE8 — Chapter 28
     POOLS_SPAS = 200  # 0xC8 — Chapter 31
     ERROR_REPORTING = 206  # 0xCE — Chapter 34
@@ -187,7 +187,7 @@ class InterfaceOption1(IntEnum):
     SRCHK = 0x08
     SMART = 0x10
     MONITOR = 0x40
-    IDMON = 0x01  # bit within the high nibble
+    IDMON = 0x20
 
 
 class InterfaceOption3(IntEnum):
