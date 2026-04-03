@@ -2,11 +2,19 @@
 
 Tests the HA config flow UI steps: transport selection, TCP/serial
 details, entry creation, and duplicate detection.
+
+Requires ``pytest-homeassistant-custom-component``; automatically
+skipped (not errored) in the library-only CI.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+
+import pytest
+
+# Skip the entire module when HA is not installed (library CI).
+pytest.importorskip("homeassistant")
 
 from homeassistant import config_entries
 from homeassistant.data_entry_flow import FlowResultType
