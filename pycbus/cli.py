@@ -56,7 +56,7 @@ from .checksum import checksum, verify
 from .commands import lighting_off, lighting_on, lighting_ramp, lighting_terminate_ramp
 from .constants import RAMP_DURATIONS, LightingCommand
 
-# Matches an optional sign, digits/decimal, and an optional 's'/'S' suffix.
+# Matches digits/decimal with an optional 's'/'S' suffix (no sign — rates are positive).
 _RATE_RE = re.compile(r"^\d+(?:\.\d+)?[sS]?$")
 
 
