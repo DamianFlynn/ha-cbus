@@ -13,7 +13,14 @@ Planned test cases:
     - Options flow: edit group names
     - Duplicate entry detection (same host:port or device)
 
-This is a stub — tests will be added alongside the config flow implementation.
+This is a stub - tests will be added alongside the config flow implementation.
 """
 
 from __future__ import annotations
+
+import pytest
+
+
+@pytest.mark.skip(reason="config flow not yet implemented")
+def test_config_flow_placeholder() -> None:
+    """Placeholder so pytest collects at least one item."""
