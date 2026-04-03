@@ -67,6 +67,25 @@ class TestCliBuild:
         exit_code = main(["build", "on", "--group", "1", "--network", "254"])
         assert exit_code == 0
 
+    def test_build_ramp_invalid_rate_letters_only(self, capsys) -> None:  # type: ignore[no-untyped-def]
+        """``--rate s`` (letters only) should return exit code 1 with an error message."""
+        exit_code = main(["build", "ramp", "--group", "1", "--level", "128", "--rate", "s"])
+        assert exit_code == 1
+        err = capsys.readouterr().err
+        assert "--rate" in err
+
+    def test_build_ramp_invalid_rate_mixed_suffix(self, capsys) -> None:  # type: ignore[no-untyped-def]
+        """``--rate 4sec`` (non-standard suffix) should return exit code 1 with an error message."""
+        exit_code = main(["build", "ramp", "--group", "1", "--level", "128", "--rate", "4sec"])
+        assert exit_code == 1
+        err = capsys.readouterr().err
+        assert "--rate" in err
+
+    def test_build_ramp_uppercase_suffix_accepted(self, capsys) -> None:  # type: ignore[no-untyped-def]
+        """``--rate 4S`` (uppercase suffix) should be accepted."""
+        exit_code = main(["build", "ramp", "--group", "1", "--level", "128", "--rate", "4S"])
+        assert exit_code == 0
+
 
 class TestCliChecksum:
     """Tests for the ``checksum`` sub-command."""

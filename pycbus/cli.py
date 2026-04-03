@@ -49,11 +49,15 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 
 from .checksum import checksum, verify
 from .commands import lighting_off, lighting_on, lighting_ramp, lighting_terminate_ramp
 from .constants import RAMP_DURATIONS, LightingCommand
+
+# Matches an optional sign, digits/decimal, and an optional 's'/'S' suffix.
+_RATE_RE = re.compile(r"^\d+(?:\.\d+)?[sS]?$")
 
 
 def _find_closest_ramp(seconds: float) -> LightingCommand:
@@ -79,6 +83,34 @@ def _find_closest_ramp(seconds: float) -> LightingCommand:
             best_diff = diff
             best_rate = rate
     return best_rate
+
+
+def _parse_rate_seconds(rate_str: str) -> float:
+    """Parse a rate string such as ``"4s"`` or ``"30.5"`` into seconds.
+
+    Args:
+        rate_str: A string of the form ``"<number>[sS]"``, e.g. ``"4s"``,
+                  ``"30S"``, or ``"120"``.
+
+    Returns:
+        The numeric duration in seconds as a float.
+
+    Raises:
+        ValueError: If *rate_str* does not match the expected format.
+
+    Example::
+
+        >>> _parse_rate_seconds("4s")
+        4.0
+        >>> _parse_rate_seconds("30")
+        30.0
+    """
+    if not _RATE_RE.match(rate_str):
+        raise ValueError(
+            f"Invalid rate '{rate_str}': expected a positive number with an "
+            "optional 's' suffix, e.g. '4s', '30', '120s'."
+        )
+    return float(rate_str.rstrip("sS"))
 
 
 def _format_hex(data: bytes) -> str:
@@ -128,8 +160,11 @@ def cmd_build(args: argparse.Namespace) -> int:
     elif args.action == "ramp":
         level = args.level
         if args.rate:
-            # Parse rate string like "4s", "30s", "120s"
-            rate_seconds = float(args.rate.rstrip("sS"))
+            try:
+                rate_seconds = _parse_rate_seconds(args.rate)
+            except ValueError as exc:
+                print(f"--rate: {exc}", file=sys.stderr)
+                return 1
             rate = _find_closest_ramp(rate_seconds)
         else:
             rate = LightingCommand.RAMP_INSTANT
