@@ -32,6 +32,7 @@ Key modules:
 - :mod:`pycbus.transport`   — Async transport protocol (TCP / serial).
 - :mod:`pycbus.protocol`    — PCI/CNI init and runtime state machine.
 - :mod:`pycbus.applications`— Per-application SAL definitions (extensible).
+- :mod:`pycbus.exceptions`  — Library exception hierarchy.
 
 Minimum Python version: 3.12 (uses modern ``type`` statement support).
 
@@ -39,3 +40,15 @@ License: Apache-2.0
 """
 
 __version__ = "0.1.0"
+
+from .exceptions import CbusConnectionError, CbusError, CbusTimeoutError
+from .transport import CbusTransport, SerialTransport, TcpTransport
+
+__all__ = [
+    "CbusConnectionError",
+    "CbusError",
+    "CbusTimeoutError",
+    "CbusTransport",
+    "SerialTransport",
+    "TcpTransport",
+]
