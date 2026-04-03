@@ -1,4 +1,15 @@
-"""Tests for pycbus checksum module."""
+"""Tests for pycbus checksum module.
+
+The C-Bus checksum is a two's-complement of the sum of all payload bytes,
+masked to 8 bits.  These tests verify:
+
+- Known-value correctness against a real Lighting ON command.
+- Round-trip: checksum → verify → True.
+- Corruption detection: flipped bytes → verify → False.
+- Edge case: all-zero payload (checksum should also be 0x00).
+
+Reference: *C-Bus Serial Interface User Guide*, §4.2.2.
+"""
 
 from __future__ import annotations
 
