@@ -4,13 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pycbus"
+# Library uses SemVer (MAJOR.MINOR.PATCH).
+# The HA integration uses CalVer (YYYY.M.PATCH) in manifest.json.
 version = "0.1.0"
 description = "Pure-Python async C-Bus PCI/CNI protocol library"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.12"
 authors = [
-    { name = "Damian Flynn", email = "damian@ yourwebsite.com" },
+    { name = "Damian Flynn" },
 ]
 classifiers = [
     "Development Status :: 2 - Pre-Alpha",
@@ -26,6 +28,18 @@ dependencies = [
     "pyserial-asyncio>=0.6",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=5.0",
+    "ruff>=0.4",
+    "mypy>=1.10",
+]
+
+[project.scripts]
+pycbus = "pycbus.cli:main"
+
 [project.urls]
 Homepage = "https://github.com/DamianFlynn/ha-cbus"
 Repository = "https://github.com/DamianFlynn/ha-cbus"
@@ -36,7 +50,6 @@ include = ["pycbus*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-asyncio_mode = "auto"
 
 [tool.mypy]
 python_version = "3.12"

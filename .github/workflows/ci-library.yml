@@ -1,0 +1,92 @@
+# CI pipeline for the pycbus protocol library.
+#
+# Runs on every push and pull request that touches library source or tests.
+# Jobs:
+#   lint   — ruff check + ruff format --check + mypy strict
+#   test   — pytest across Python 3.12 / 3.13 matrix
+#
+# The test job depends on lint passing first to fail fast on style issues.
+
+name: "CI: pycbus library"
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "pycbus/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - ".github/workflows/ci-library.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "pycbus/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - ".github/workflows/ci-library.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint & type-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff mypy pyserial-asyncio
+
+      - name: Ruff check (lint)
+        run: ruff check pycbus/ tests/
+
+      - name: Ruff format (style)
+        run: ruff format --check pycbus/ tests/
+
+      - name: Mypy (strict type checking)
+        run: mypy pycbus/
+
+  test:
+    name: Test (Python ${{ matrix.python-version }})
+    needs: lint
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]" 2>/dev/null || pip install -e .
+          pip install pytest pytest-asyncio pytest-cov
+
+      - name: Run tests with coverage
+        run: |
+          python -m pytest tests/ \
+            --cov=pycbus \
+            --cov-report=term-missing \
+            --cov-report=xml:coverage.xml \
+            -v
+
+      - name: Upload coverage artifact
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+          retention-days: 30

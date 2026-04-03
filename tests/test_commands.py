@@ -1,4 +1,15 @@
-"""Tests for pycbus command builders."""
+"""Tests for pycbus SAL command builders.
+
+Each command builder (lighting_on, lighting_off, lighting_ramp,
+lighting_terminate_ramp) produces a checksummed byte sequence ready
+for hex-encoding and wire framing.  These tests verify:
+
+- Checksum validity for every command type.
+- Correct byte layout (DAT, app ID, network, opcode, group, level).
+- Expected payload length (ON/RAMP = 7 bytes, OFF = 6 bytes).
+
+Reference: *Chapter 02 — C-Bus Lighting Application*, §2.6.
+"""
 
 from __future__ import annotations
 
