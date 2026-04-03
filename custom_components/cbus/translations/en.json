@@ -1,0 +1,40 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "C-Bus Connection",
+        "description": "Connect to your C-Bus network via a CNI (TCP) or PCI (serial) interface.",
+        "data": {
+          "transport": "Connection type",
+          "host": "Host",
+          "port": "Port",
+          "serial_port": "Serial port"
+        }
+      },
+      "import": {
+        "title": "Import Device Labels",
+        "description": "Optionally import group labels from a C-Gate XML export or C-Bus Toolkit CBZ file.",
+        "data": {
+          "import_file": "Project file (.xml or .cbz)"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "This C-Bus network is already configured."
+    },
+    "error": {
+      "cannot_connect": "Unable to connect to C-Bus interface.",
+      "invalid_file": "The uploaded file could not be parsed."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "C-Bus Options",
+        "data": {
+          "import_file": "Re-import project file"
+        }
+      }
+    }
+  }
+}
