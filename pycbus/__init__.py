@@ -42,13 +42,16 @@ License: Apache-2.0
 __version__ = "0.1.0"
 
 from .exceptions import CbusConnectionError, CbusError, CbusTimeoutError
+from .protocol import CbusProtocol, ProtocolState
 from .transport import CbusTransport, SerialTransport, TcpTransport
 
 __all__ = [
     "CbusConnectionError",
     "CbusError",
+    "CbusProtocol",
     "CbusTimeoutError",
     "CbusTransport",
+    "ProtocolState",
     "SerialTransport",
     "TcpTransport",
 ]
