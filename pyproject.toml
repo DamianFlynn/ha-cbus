@@ -8,14 +8,15 @@ name = "pycbus"
 # The HA integration uses CalVer (YYYY.M.PATCH) in manifest.json.
 version = "0.1.0"
 description = "Pure-Python async C-Bus PCI/CNI protocol library"
-readme = "README.md"
+readme = "pycbus/README.md"
 license = "Apache-2.0"
 requires-python = ">=3.12"
 authors = [
     { name = "Damian Flynn" },
 ]
+keywords = ["cbus", "clipsal", "home-automation", "pci", "cni", "async"]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
