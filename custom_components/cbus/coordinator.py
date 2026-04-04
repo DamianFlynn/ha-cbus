@@ -164,6 +164,9 @@ class CbusCoordinator(DataUpdateCoordinator[GroupStateDict]):
         # Register for SAL monitor events.
         self._unsubscribe_events = self._protocol.on_event(self._handle_sal_event)
 
+        # Request initial state for all supported applications.
+        await self._request_initial_status()
+
         _LOGGER.info("C-Bus coordinator connected")
 
     async def async_shutdown(self) -> None:
@@ -184,6 +187,41 @@ class CbusCoordinator(DataUpdateCoordinator[GroupStateDict]):
     async def _async_update_data(self) -> GroupStateDict:
         """No-op: C-Bus is push-based, state flows through events."""
         return self.data
+
+    # ------------------------------------------------------------------
+    # Initial state synchronisation
+    # ------------------------------------------------------------------
+
+    async def _request_initial_status(self) -> None:
+        """Request current levels for all supported applications.
+
+        Called once after connect to populate the state cache before
+        entities start reading.  Errors are logged but do not prevent
+        startup — the coordinator will still get live updates from
+        the MONITOR stream.
+        """
+        if self._protocol is None:
+            return
+
+        for app_id in (ApplicationId.LIGHTING, ApplicationId.ENABLE):
+            try:
+                levels = await self._protocol.request_status(app_id)
+                self.data.update(levels)
+                _LOGGER.info(
+                    "Initial status for app 0x%02X: %d groups with non-zero levels",
+                    app_id,
+                    sum(1 for v in levels.values() if v > 0),
+                )
+            except Exception:
+                _LOGGER.warning(
+                    "Failed to get initial status for app 0x%02X; "
+                    "state will update from live events",
+                    app_id,
+                    exc_info=True,
+                )
+
+        if self.data:
+            self.async_set_updated_data(self.data)
 
     # ------------------------------------------------------------------
     # Command methods (called by entity platforms)
