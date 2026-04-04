@@ -262,13 +262,19 @@ class CbusProtocol:
             await self._stop_read_loop()
 
             try:
-                # Send all 3 block requests.
+                # Send all 3 block requests with confirmation codes.
+                # In SMART mode the PCI requires a confirmation code on
+                # every command, including status requests.
                 for block in range(STATUS_BLOCK_COUNT):
                     cmd = status_request(app_id, block)
                     hex_payload = cmd.hex().upper().encode()
-                    await self._send_frame(hex_payload)
+                    conf = self._get_confirmation_code()
+                    await self._send_frame(hex_payload + conf)
                     _LOGGER.debug(
-                        "Sent status request: app=0x%02X block=%d", app_id, block
+                        "Sent status request: app=0x%02X block=%d conf=%s",
+                        app_id,
+                        block,
+                        conf.decode(),
                     )
 
                 # Read lines until all blocks are received or timeout.
