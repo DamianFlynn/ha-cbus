@@ -171,6 +171,31 @@ class TestCliChecksum:
         assert "NO" in output
 
 
+class TestCliVerboseLevels:
+    """Tests for the -v / -vv verbose flag handling."""
+
+    def test_verbose_default_zero(self) -> None:
+        """No -v flag should result in verbose=0."""
+        from cli.cbus_cli import build_parser
+
+        args = build_parser().parse_args(["build", "on", "--group", "1"])
+        assert args.verbose == 0
+
+    def test_verbose_single_v(self) -> None:
+        """-v should set verbose=1."""
+        from cli.cbus_cli import build_parser
+
+        args = build_parser().parse_args(["-v", "build", "on", "--group", "1"])
+        assert args.verbose == 1
+
+    def test_verbose_double_v(self) -> None:
+        """-vv should set verbose=2."""
+        from cli.cbus_cli import build_parser
+
+        args = build_parser().parse_args(["-vv", "build", "on", "--group", "1"])
+        assert args.verbose == 2
+
+
 class TestCliMisc:
     """Tests for edge cases and error handling."""
 

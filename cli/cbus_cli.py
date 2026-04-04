@@ -62,6 +62,7 @@ from pycbus.commands import (
     lighting_on,
     lighting_ramp,
     lighting_terminate_ramp,
+    parse_sal_event,
     trigger_event,
 )
 from pycbus.constants import RAMP_DURATIONS, ApplicationId, LightingCommand
@@ -78,6 +79,18 @@ _APP_NAMES: dict[int, str] = {
     ApplicationId.LIGHTING: "LIGHTING",
     ApplicationId.TRIGGER: "TRIGGER",
     ApplicationId.ENABLE: "ENABLE",
+    ApplicationId.SECURITY: "SECURITY",
+    ApplicationId.METERING: "METERING",
+    ApplicationId.TEMPERATURE_BROADCAST: "TEMPERATURE",
+    ApplicationId.AIR_CONDITIONING: "AIRCON",
+    ApplicationId.CLOCK: "CLOCK",
+}
+
+# Opcode names for known lighting commands.
+_LIGHTING_OPCODE_NAMES: dict[int, str] = {
+    int(LightingCommand.ON): "ON",
+    int(LightingCommand.OFF): "OFF",
+    int(LightingCommand.TERMINATE_RAMP): "TERMINATE",
 }
 
 
@@ -337,22 +350,55 @@ def cmd_monitor(args: argparse.Namespace) -> int:
         0 on clean exit, 2 on connection error.
     """
 
-    def _on_event(sal_bytes: bytes) -> None:
-        hex_str = sal_bytes.hex().upper()
-        app_id = sal_bytes[1] if len(sal_bytes) > 1 else 0
-        app_name = _APP_NAMES.get(app_id, f"APP_{app_id}")
+    def _format_opcode(app_id: int, opcode: int) -> str:
+        """Return a human-readable name for a SAL opcode."""
+        if app_id == ApplicationId.LIGHTING:
+            name = _LIGHTING_OPCODE_NAMES.get(opcode)
+            if name:
+                return name
+            if opcode & 0x07 == 0x02:
+                for duration, rate in RAMP_DURATIONS:
+                    if int(rate) == opcode:
+                        return f"RAMP_{duration}S"
+                return f"RAMP_0x{opcode:02X}"
+        elif app_id == ApplicationId.TRIGGER:
+            return "TRIGGER"
+        elif app_id == ApplicationId.ENABLE:
+            if opcode == 0x79:
+                return "ON"
+            if opcode == 0x01:
+                return "OFF"
+        return f"0x{opcode:02X}"
 
-        if len(sal_bytes) >= 5:
-            group = sal_bytes[4]
-            opcode = sal_bytes[3]
-            level = sal_bytes[5] if len(sal_bytes) > 5 else None
-            level_str = f" level={level}" if level is not None else ""
-            print(
-                f"  [{app_name}] opcode=0x{opcode:02X} "
-                f"group={group}{level_str}  raw={hex_str}"
-            )
-        else:
-            print(f"  [RAW] {hex_str}")
+    def _on_event(sal_bytes: bytes) -> None:
+        """Parse and display a SAL monitor event."""
+        raw_hex = sal_bytes.hex().upper()
+        event = parse_sal_event(sal_bytes)
+
+        if event is None:
+            print(f"  [RAW] {raw_hex}")
+            return
+
+        app_name = _APP_NAMES.get(event.app_id, f"APP_0x{event.app_id:02X}")
+
+        for cmd in event.commands:
+            op_name = _format_opcode(event.app_id, cmd.opcode)
+            parts = [
+                f"[{app_name}]",
+                f"src={event.source}",
+                op_name,
+                f"group={cmd.group}",
+            ]
+            if cmd.data is not None:
+                if event.app_id == ApplicationId.LIGHTING:
+                    parts.append(f"level={cmd.data}")
+                elif event.app_id == ApplicationId.TRIGGER:
+                    parts.append(f"action={cmd.data}")
+                else:
+                    parts.append(f"data={cmd.data}")
+            print(f"  {' '.join(parts)}")
+
+        _LOGGER.debug("Raw: %s", raw_hex)
 
     async def _run() -> int:
         protocol = await _connect(args.host, args.port)
@@ -630,8 +676,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "-v",
         "--verbose",
-        action="store_true",
-        help="Enable debug logging (protocol-level hex trace).",
+        action="count",
+        default=0,
+        help=(
+            "Increase logging verbosity. "
+            "-v = INFO (state changes), "
+            "-vv = DEBUG (hex frames + parse detail)."
+        ),
     )
     sub = parser.add_subparsers(
         dest="command",
@@ -896,8 +947,19 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    if getattr(args, "verbose", False):
-        logging.basicConfig(level=logging.DEBUG, format="%(name)s: %(message)s")
+    verbose = getattr(args, "verbose", 0)
+    if verbose >= 2:
+        log_level = logging.DEBUG
+    elif verbose >= 1:
+        log_level = logging.INFO
+    else:
+        log_level = logging.WARNING
+
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s %(name)s %(levelname)s %(message)s",
+        datefmt="%H:%M:%S",
+    )
 
     if args.command is None:
         parser.print_help()
