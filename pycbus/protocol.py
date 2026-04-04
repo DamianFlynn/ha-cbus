@@ -55,6 +55,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 from collections.abc import Callable
 from enum import Enum, auto
 from typing import TYPE_CHECKING
@@ -231,8 +232,8 @@ class CbusProtocol:
         """Request the current level of all groups for an application.
 
         Sends binary status requests for all 3 blocks (covering groups
-        0-255) and collects the replies.  The results are also dispatched
-        to any registered :meth:`on_status` callbacks.
+        0-255) and reads the replies inline (same pattern as
+        :meth:`send_command`).
 
         Args:
             app_id: Application ID to query
@@ -244,7 +245,6 @@ class CbusProtocol:
 
         Raises:
             CbusConnectionError: If not in READY state.
-            CbusTimeoutError: If the PCI does not reply in time.
         """
         if self._state != ProtocolState.READY:
             raise CbusConnectionError(
@@ -258,28 +258,51 @@ class CbusProtocol:
             self._status_blocks_remaining = STATUS_BLOCK_COUNT
             self._status_done.clear()
 
-            # Send all 3 block requests.
-            for block in range(STATUS_BLOCK_COUNT):
-                cmd = status_request(app_id, block)
-                hex_payload = cmd.hex().upper().encode()
-                await self._send_frame(hex_payload)
-                _LOGGER.debug("Sent status request: app=0x%02X block=%d", app_id, block)
+            # Pause the read loop so we can read replies directly.
+            await self._stop_read_loop()
 
-            # Wait for replies (read loop will call _handle_status_reply).
             try:
-                await asyncio.wait_for(self._status_done.wait(), timeout=timeout)
-            except TimeoutError as exc:
-                _LOGGER.warning(
-                    "Status request timed out for app 0x%02X (%d blocks still pending)",
-                    app_id,
-                    self._status_blocks_remaining,
-                )
-                raise CbusTimeoutError(
-                    f"Status request timed out for app 0x{app_id:02X}"
-                ) from exc
+                # Send all 3 block requests.
+                for block in range(STATUS_BLOCK_COUNT):
+                    cmd = status_request(app_id, block)
+                    hex_payload = cmd.hex().upper().encode()
+                    await self._send_frame(hex_payload)
+                    _LOGGER.debug(
+                        "Sent status request: app=0x%02X block=%d", app_id, block
+                    )
+
+                # Read lines until all blocks are received or timeout.
+                deadline = time.monotonic() + timeout
+                while self._status_blocks_remaining > 0:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    try:
+                        line = await self._transport.read_line()
+                    except CbusTimeoutError:
+                        _LOGGER.info(
+                            "Status read timeout (app 0x%02X, %d blocks pending)",
+                            app_id,
+                            self._status_blocks_remaining,
+                        )
+                        break
+                    _LOGGER.debug("STATUS RX: %r", line)
+                    self._handle_line(line)
+
+                if self._status_blocks_remaining > 0:
+                    _LOGGER.warning(
+                        "Status request incomplete for app 0x%02X "
+                        "(%d of %d blocks received)",
+                        app_id,
+                        STATUS_BLOCK_COUNT - self._status_blocks_remaining,
+                        STATUS_BLOCK_COUNT,
+                    )
+
             finally:
                 result = dict(self._status_levels)
                 self._status_pending_app = None
+                # Always restart the read loop.
+                self._start_read_loop()
 
         # Dispatch to status callbacks.
         for callback in tuple(self._status_callbacks):
@@ -368,12 +391,12 @@ class CbusProtocol:
             payload_hex: Hex-encoded SAL payload including checksum.
 
         Returns:
-            ``True`` if the PCI confirmed success,
-            ``False`` if NEGATIVE (``!``).
+            ``True`` if the PCI confirmed success or if the command was
+            sent but no confirmation arrived (fire-and-forget).
+            ``False`` if the PCI explicitly rejected the command (``!``).
 
         Raises:
             CbusConnectionError: If not in READY state.
-            CbusTimeoutError: If no confirmation arrives in time.
         """
         if self._state != ProtocolState.READY:
             raise CbusConnectionError(f"Cannot send: protocol is {self._state.name}")
@@ -390,13 +413,23 @@ class CbusProtocol:
 
                 # Read lines looking for our confirmation code, same
                 # pattern as _send_cal_and_confirm during init.
+                #
+                # The PCI prepends the confirmation code to the next line
+                # it outputs.  If the bus is quiet, the PCI may buffer the
+                # confirmation indefinitely until a bus event flushes it.
+                # In that case, the transport read_line() times out and we
+                # treat the command as sent (fire-and-forget).
                 for _ in range(10):  # safety limit
                     try:
                         line = await self._transport.read_line()
-                    except CbusTimeoutError as exc:
-                        raise CbusTimeoutError(
-                            "Timeout waiting for PCI confirmation"
-                        ) from exc
+                    except CbusTimeoutError:
+                        _LOGGER.info(
+                            "No confirmation received (code=%s) — "
+                            "command was sent but PCI did not respond "
+                            "within timeout (normal for quiet bus).",
+                            conf.decode(),
+                        )
+                        return True
                     _LOGGER.debug("CMD RX: %r", line)
 
                     # Check for our confirmation code in the response.
@@ -424,9 +457,12 @@ class CbusProtocol:
                     # Not a confirmation — dispatch as SAL event.
                     self._dispatch_event(line)
 
-                raise CbusTimeoutError(
-                    "No confirmation received after 10 response lines"
+                _LOGGER.info(
+                    "No confirmation after 10 response lines (code=%s) — "
+                    "assuming sent.",
+                    conf.decode(),
                 )
+                return True
             finally:
                 # Always restart the read loop.
                 self._start_read_loop()
