@@ -277,18 +277,21 @@ class TestSendCommand:
         # Stop the read loop so we control responses manually
         await p._stop_read_loop()
 
-        # Prepare the confirmation
+        # After init (h,i,j,k used), next confirmation code is 'l'.
+        expected_conf = b"l"
+
+        # Prepare the confirmation — PCI echoes our code + '.'
         async def _simulate_confirm() -> None:
             await asyncio.sleep(0.01)
-            p._handle_line(b"g#")
+            p._handle_line(expected_conf + b".")
 
         task = asyncio.create_task(_simulate_confirm())
         result = await p.send_command(b"0538007901FF50")
         await task
 
         assert result is True
-        # The written frame should be \0538007901FF50\r
-        assert t.written[-1] == b"\\0538007901FF50\r"
+        # The written frame should include the confirmation code.
+        assert t.written[-1] == b"\\0538007901FF50l\r"
 
     @pytest.mark.asyncio
     async def test_send_command_negative(self) -> None:
@@ -299,9 +302,10 @@ class TestSendCommand:
 
         await p._stop_read_loop()
 
+        # After init (h,i,j,k), next code is 'l'.
         async def _simulate_reject() -> None:
             await asyncio.sleep(0.01)
-            p._handle_line(b"!")
+            p._handle_line(b"l!")
 
         task = asyncio.create_task(_simulate_reject())
         result = await p.send_command(b"0538007901FF50")

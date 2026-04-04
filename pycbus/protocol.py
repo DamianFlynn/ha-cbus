@@ -172,6 +172,7 @@ class CbusProtocol:
         self._command_lock = asyncio.Lock()
         self._confirmation_event = asyncio.Event()
         self._last_confirmation: bytes = b""
+        self._expected_confirmation: bytes = b""
         # Pending status request: accumulates block replies.
         self._status_pending_app: int | None = None
         self._status_levels: dict[tuple[int, int], int] = {}
@@ -352,15 +353,21 @@ class CbusProtocol:
         """Send an SAL command and wait for PCI confirmation.
 
         The payload should be the hex-encoded command bytes (e.g.
-        ``b"0538007901FF50"``).  This method wraps it with the ``\\``
-        prefix and ``\\r`` suffix, sends it, and waits for the PCI's
-        confirmation character.
+        ``b"0538007901FF50"``).  This method appends a cycling
+        confirmation code, wraps with ``\\`` prefix and ``\\r``
+        suffix, sends it, and waits for the PCI to echo back the
+        confirmation code.
+
+        In SMART mode the PCI responds with
+        ``<conf_code><result>`` where result is ``.`` for success
+        or ``!`` for error.  For example, sending with code ``l``
+        yields ``l.`` on success or ``l!`` on failure.
 
         Args:
             payload_hex: Hex-encoded SAL payload including checksum.
 
         Returns:
-            ``True`` if the PCI responded with POSITIVE (``g``),
+            ``True`` if the PCI confirmed success,
             ``False`` if NEGATIVE (``!``).
 
         Raises:
@@ -371,8 +378,12 @@ class CbusProtocol:
             raise CbusConnectionError(f"Cannot send: protocol is {self._state.name}")
 
         async with self._command_lock:
+            conf = self._get_confirmation_code()
+            self._expected_confirmation = conf
             self._confirmation_event.clear()
-            await self._send_frame(payload_hex)
+            # Append confirmation code to payload before framing.
+            await self._send_frame(payload_hex + conf)
+            _LOGGER.debug("Sent command with confirmation code=%s", conf.decode())
 
             try:
                 await asyncio.wait_for(
@@ -382,7 +393,7 @@ class CbusProtocol:
             except TimeoutError as exc:
                 raise CbusTimeoutError("Timeout waiting for PCI confirmation") from exc
 
-            confirmed = _POSITIVE in self._last_confirmation
+            confirmed = _NEGATIVE not in self._last_confirmation
             if not confirmed:
                 _LOGGER.warning("Command rejected: %s", self._last_confirmation)
             return confirmed
@@ -620,15 +631,29 @@ class CbusProtocol:
     def _handle_line(self, line: bytes) -> None:
         """Classify and handle a single line from the PCI.
 
+        In SMART mode the PCI responds to commands with the cycling
+        confirmation code we appended, followed by ``.`` (success) or
+        ``!`` (error).  For example ``l.`` or ``l!``.
+
+        We detect confirmations by checking whether the line contains
+        our expected confirmation code **or** the legacy ``g`` / ``!``.
+
         Args:
             line: Raw bytes from transport (CR already stripped).
         """
-        # Check for confirmation codes anywhere in the line.
-        if _POSITIVE in line or _NEGATIVE in line:
+        # Check for our expected confirmation code or legacy g/!
+        is_confirmation = (
+            _NEGATIVE in line
+            or (self._expected_confirmation and self._expected_confirmation in line)
+            or _POSITIVE in line
+        )
+
+        if is_confirmation:
             self._last_confirmation = line
             self._confirmation_event.set()
+            _LOGGER.debug("Confirmation received: %r", line)
             # Don't return — a confirmation line may also contain data.
-            if len(line) <= 2:
+            if len(line) <= 3:
                 return
 
         if _READY in line and len(line) <= 2:
