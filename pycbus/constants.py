@@ -145,6 +145,49 @@ RAMP_DURATIONS: list[tuple[int, LightingCommand]] = sorted(
 )
 
 
+class EnableCommand(IntEnum):
+    """SAL opcodes for the Enable Control application (app 203 / 0xCB).
+
+    Enable Control is a simple binary on/off application with no dimming.
+    Only two opcodes are used:
+
+    - ``OFF`` (0x01): Disable the group.
+    - ``ON``  (0x79): Enable the group.
+
+    Frame structure::
+
+        05 CB 00 <opcode> <group> [FF] <checksum>
+
+    Reference: *Chapter 08 -- Enable Control Application*.
+    """
+
+    OFF = 0x01
+    ON = 0x79
+
+
+class TriggerCommand(IntEnum):
+    """SAL opcodes for the Trigger Control application (app 202 / 0xCA).
+
+    Trigger groups are fire-and-forget: they carry a group address and an
+    action selector byte (0-255) but have no persistent level state.
+
+    - ``TRIGGER_MIN`` (0x02): Trigger with action selector = 0x00.
+    - ``TRIGGER_MAX`` (0x79): Trigger with action selector = 0xFF.
+
+    For arbitrary action selectors, use ``TRIGGER_MIN`` with an explicit
+    action byte.
+
+    Frame structure::
+
+        05 CA 00 <opcode> <group> <action> <checksum>
+
+    Reference: *Chapter 07 -- Trigger Control Application*.
+    """
+
+    TRIGGER_MIN = 0x02
+    TRIGGER_MAX = 0x79
+
+
 class ConfirmationCode(IntEnum):
     """PCI confirmation / status codes returned after each command.
 

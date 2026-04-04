@@ -30,14 +30,18 @@ from typing import TYPE_CHECKING, Any
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from pycbus.commands import (
+    enable_off,
+    enable_on,
     lighting_off,
     lighting_on,
     lighting_ramp,
     lighting_terminate_ramp,
+    trigger_event,
 )
 from pycbus.constants import (
     RAMP_DURATIONS,
     ApplicationId,
+    EnableCommand,
     LightingCommand,
 )
 from pycbus.exceptions import CbusConnectionError
@@ -53,6 +57,8 @@ from .const import (
 )
 
 if TYPE_CHECKING:
+    import collections.abc
+
     from homeassistant.config_entries import ConfigEntry
     from homeassistant.core import HomeAssistant
 
@@ -121,6 +127,9 @@ class CbusCoordinator(DataUpdateCoordinator[GroupStateDict]):
 
         # Initialise the state cache.
         self.data: GroupStateDict = {}
+
+        # Trigger event callbacks: list of (group, action) receivers.
+        self._trigger_callbacks: list[collections.abc.Callable[[int, int], None]] = []
 
     @property
     def protocol(self) -> CbusProtocol | None:
@@ -233,6 +242,67 @@ class CbusCoordinator(DataUpdateCoordinator[GroupStateDict]):
         await self._send(cmd)
 
     # ------------------------------------------------------------------
+    # Enable Control (app 203) command methods
+    # ------------------------------------------------------------------
+
+    async def async_enable_on(self, group: int, network: int = 0) -> None:
+        """Enable a group (set level to 0xFF).
+
+        Args:
+            group: Target group address (0-255).
+            network: C-Bus network number (default 0).
+        """
+        cmd = enable_on(group=group, network=network)
+        if await self._send(cmd):
+            self._update_level(ApplicationId.ENABLE, group, 0xFF)
+
+    async def async_enable_off(self, group: int, network: int = 0) -> None:
+        """Disable a group (set level to 0x00).
+
+        Args:
+            group: Target group address (0-255).
+            network: C-Bus network number (default 0).
+        """
+        cmd = enable_off(group=group, network=network)
+        if await self._send(cmd):
+            self._update_level(ApplicationId.ENABLE, group, 0x00)
+
+    # ------------------------------------------------------------------
+    # Trigger Control (app 202) command methods
+    # ------------------------------------------------------------------
+
+    async def async_trigger(
+        self, group: int, action: int = 0, network: int = 0
+    ) -> None:
+        """Send a trigger event.
+
+        Args:
+            group: Trigger group address (0-255).
+            action: Action selector (0-255, default 0).
+            network: C-Bus network number (default 0).
+        """
+        cmd = trigger_event(group=group, action=action, network=network)
+        await self._send(cmd)
+
+    def on_trigger(
+        self, callback: collections.abc.Callable[[int, int], None]
+    ) -> collections.abc.Callable[[], None]:
+        """Register a callback for trigger events.
+
+        Args:
+            callback: Called with (group, action) when a trigger SAL arrives.
+
+        Returns:
+            An unsubscribe callable.
+        """
+        self._trigger_callbacks.append(callback)
+
+        def _unsub() -> None:
+            self._trigger_callbacks.remove(callback)
+
+        return _unsub
+
+    # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
@@ -289,6 +359,10 @@ class CbusCoordinator(DataUpdateCoordinator[GroupStateDict]):
 
         if app_id == ApplicationId.LIGHTING:
             self._handle_lighting_event(opcode, group, sal_bytes)
+        elif app_id == ApplicationId.ENABLE:
+            self._handle_enable_event(opcode, group)
+        elif app_id == ApplicationId.TRIGGER:
+            self._handle_trigger_event(group, sal_bytes)
 
     def _handle_lighting_event(self, opcode: int, group: int, sal_bytes: bytes) -> None:
         """Handle a Lighting application SAL event.
@@ -316,3 +390,35 @@ class CbusCoordinator(DataUpdateCoordinator[GroupStateDict]):
             if len(sal_bytes) > 5:
                 level = sal_bytes[5]
                 self._update_level(ApplicationId.LIGHTING, group, level)
+
+    def _handle_enable_event(self, opcode: int, group: int) -> None:
+        """Handle an Enable Control application SAL event.
+
+        Args:
+            opcode: The SAL opcode byte.
+            group: The target group address.
+        """
+        try:
+            cmd = EnableCommand(opcode)
+        except ValueError:
+            _LOGGER.debug("Unknown enable opcode: 0x%02X", opcode)
+            return
+
+        if cmd == EnableCommand.OFF:
+            self._update_level(ApplicationId.ENABLE, group, 0x00)
+        elif cmd == EnableCommand.ON:
+            self._update_level(ApplicationId.ENABLE, group, 0xFF)
+
+    def _handle_trigger_event(self, group: int, sal_bytes: bytes) -> None:
+        """Handle a Trigger Control application SAL event.
+
+        Trigger events are fire-and-forget -- no persistent state.
+        Dispatches to registered trigger callbacks.
+
+        Args:
+            group: The trigger group address.
+            sal_bytes: Full SAL frame bytes.
+        """
+        action = sal_bytes[5] if len(sal_bytes) > 5 else 0
+        for callback in tuple(self._trigger_callbacks):
+            callback(group, action)

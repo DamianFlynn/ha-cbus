@@ -37,7 +37,13 @@ Usage::
 from __future__ import annotations
 
 from .checksum import checksum
-from .constants import ApplicationId, LightingCommand, PointToMultipointDAT
+from .constants import (
+    ApplicationId,
+    EnableCommand,
+    LightingCommand,
+    PointToMultipointDAT,
+    TriggerCommand,
+)
 
 
 def _build_pm_command(*payload_bytes: int) -> bytes:
@@ -156,4 +162,80 @@ def lighting_terminate_ramp(group: int, network: int = 0) -> bytes:
         network,
         LightingCommand.TERMINATE_RAMP,
         group,
+    )
+
+
+# ------------------------------------------------------------------
+# Enable Control (app 203 / 0xCB)
+# ------------------------------------------------------------------
+
+
+def enable_on(group: int, network: int = 0) -> bytes:
+    """Build an Enable ON command (group -> 0xFF).
+
+    Immediately enables the target group.
+
+    Args:
+        group:   Target group address (0-255).
+        network: C-Bus network number (default 0).
+
+    Returns:
+        7-byte command: DAT + app + net + ON + group + 0xFF + checksum.
+    """
+    return _build_pm_command(
+        PointToMultipointDAT.BROADCAST,
+        ApplicationId.ENABLE,
+        network,
+        EnableCommand.ON,
+        group,
+        0xFF,
+    )
+
+
+def enable_off(group: int, network: int = 0) -> bytes:
+    """Build an Enable OFF command (group -> 0x00).
+
+    Immediately disables the target group.
+
+    Args:
+        group:   Target group address (0-255).
+        network: C-Bus network number (default 0).
+
+    Returns:
+        6-byte command: DAT + app + net + OFF + group + checksum.
+    """
+    return _build_pm_command(
+        PointToMultipointDAT.BROADCAST,
+        ApplicationId.ENABLE,
+        network,
+        EnableCommand.OFF,
+        group,
+    )
+
+
+# ------------------------------------------------------------------
+# Trigger Control (app 202 / 0xCA)
+# ------------------------------------------------------------------
+
+
+def trigger_event(group: int, action: int = 0, network: int = 0) -> bytes:
+    """Build a Trigger event command.
+
+    Fires a trigger on the specified group with the given action selector.
+
+    Args:
+        group:   Target trigger group (0-255).
+        action:  Action selector byte (0-255, default 0).
+        network: C-Bus network number (default 0).
+
+    Returns:
+        7-byte command: DAT + app + net + opcode + group + action + checksum.
+    """
+    return _build_pm_command(
+        PointToMultipointDAT.BROADCAST,
+        ApplicationId.TRIGGER,
+        network,
+        TriggerCommand.TRIGGER_MIN,
+        group,
+        action & 0xFF,
     )

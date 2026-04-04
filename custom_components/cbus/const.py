@@ -6,7 +6,7 @@ from homeassistant.const import Platform
 
 DOMAIN = "cbus"
 
-PLATFORMS: list[Platform] = [Platform.LIGHT]
+PLATFORMS: list[Platform] = [Platform.EVENT, Platform.LIGHT, Platform.SWITCH]
 
 CONF_TRANSPORT = "transport"
 CONF_SERIAL_PORT = "serial_port"
