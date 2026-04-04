@@ -15,6 +15,9 @@ Covers:
 from __future__ import annotations
 
 from pycbus.constants import (
+    LABEL_MAX_TEXT_LENGTH,
+    LABEL_MIN_ARG_COUNT,
+    LABEL_OPCODE_MASK,
     RAMP_DURATIONS,
     SERIAL_BAUD,
     TCP_PORT,
@@ -22,6 +25,8 @@ from pycbus.constants import (
     ConfirmationCode,
     InterfaceOption1,
     InterfaceOption3,
+    LabelLanguage,
+    LabelOption,
     LightingCommand,
     PointToMultipointDAT,
 )
@@ -178,3 +183,74 @@ class TestDefaults:
 
     def test_tcp_port(self) -> None:
         assert TCP_PORT == 10001
+
+
+class TestLabelOption:
+    """Verify LabelOption enum values match Chapter 02, s2.6.5."""
+
+    def test_text_label(self) -> None:
+        """TEXT_LABEL = 0x00 (bits 2:1 = 00)."""
+        assert LabelOption.TEXT_LABEL == 0x00
+
+    def test_predefined_icon(self) -> None:
+        """PREDEFINED_ICON = 0x02 (bits 2:1 = 01)."""
+        assert LabelOption.PREDEFINED_ICON == 0x02
+
+    def test_dynamic_icon(self) -> None:
+        """DYNAMIC_ICON = 0x04 (bits 2:1 = 10)."""
+        assert LabelOption.DYNAMIC_ICON == 0x04
+
+    def test_set_preferred_language(self) -> None:
+        """SET_PREFERRED_LANGUAGE = 0x06 (bits 2:1 = 11)."""
+        assert LabelOption.SET_PREFERRED_LANGUAGE == 0x06
+
+    def test_flavour_encoding(self) -> None:
+        """Flavour n should produce n << 5 when OR'd with TEXT_LABEL."""
+        for flav in range(4):
+            opts = LabelOption.TEXT_LABEL | (flav << 5)
+            assert (opts >> 5) & 0x03 == flav
+
+
+class TestLabelLanguage:
+    """Verify LabelLanguage codes match Chapter 02, s2.4.3."""
+
+    def test_english(self) -> None:
+        assert LabelLanguage.ENGLISH == 0x01
+
+    def test_english_au(self) -> None:
+        assert LabelLanguage.ENGLISH_AU == 0x02
+
+    def test_english_us(self) -> None:
+        assert LabelLanguage.ENGLISH_US == 0x0D
+
+    def test_french(self) -> None:
+        assert LabelLanguage.FRENCH == 0x4A
+
+    def test_german(self) -> None:
+        assert LabelLanguage.GERMAN == 0x50
+
+    def test_chinese(self) -> None:
+        assert LabelLanguage.CHINESE == 0xCA
+
+
+class TestLabelConstants:
+    """Verify label encoding constants."""
+
+    def test_opcode_mask(self) -> None:
+        """LABEL_OPCODE_MASK = 0xA0 = %10100000."""
+        assert LABEL_OPCODE_MASK == 0xA0
+
+    def test_max_text_length(self) -> None:
+        """Max 16 ASCII text bytes."""
+        assert LABEL_MAX_TEXT_LENGTH == 16
+
+    def test_min_arg_count(self) -> None:
+        """Minimum 3 args: group + options + language."""
+        assert LABEL_MIN_ARG_COUNT == 3
+
+    def test_opcode_range(self) -> None:
+        """Label opcode should be 0xA3 (empty) to 0xB3 (16 chars)."""
+        min_opcode = LABEL_OPCODE_MASK | LABEL_MIN_ARG_COUNT
+        max_opcode = LABEL_OPCODE_MASK | (LABEL_MIN_ARG_COUNT + LABEL_MAX_TEXT_LENGTH)
+        assert min_opcode == 0xA3
+        assert max_opcode == 0xB3

@@ -58,6 +58,8 @@ from pycbus.checksum import checksum, verify
 from pycbus.commands import (
     enable_off,
     enable_on,
+    lighting_clear_label,
+    lighting_label,
     lighting_off,
     lighting_on,
     lighting_ramp,
@@ -65,7 +67,12 @@ from pycbus.commands import (
     parse_sal_event,
     trigger_event,
 )
-from pycbus.constants import RAMP_DURATIONS, ApplicationId, LightingCommand
+from pycbus.constants import (
+    RAMP_DURATIONS,
+    ApplicationId,
+    LabelLanguage,
+    LightingCommand,
+)
 
 _LOGGER = logging.getLogger("cbus_cli")
 
@@ -335,6 +342,79 @@ def cmd_trigger(args: argparse.Namespace) -> int:
 
 
 # ===================================================================
+# label — eDLT label commands (Lighting application label sub-command)
+# ===================================================================
+
+_LANGUAGE_MAP: dict[str, LabelLanguage] = {
+    "en": LabelLanguage.ENGLISH,
+    "en-au": LabelLanguage.ENGLISH_AU,
+    "en-nz": LabelLanguage.ENGLISH_NZ,
+    "en-uk": LabelLanguage.ENGLISH_UK,
+    "en-us": LabelLanguage.ENGLISH_US,
+    "fr": LabelLanguage.FRENCH,
+    "de": LabelLanguage.GERMAN,
+    "it": LabelLanguage.ITALIAN,
+    "nl": LabelLanguage.DUTCH,
+    "es": LabelLanguage.SPANISH,
+    "zh": LabelLanguage.CHINESE,
+}
+
+
+def cmd_label(args: argparse.Namespace) -> int:
+    """Set or clear a text label on a DLT/eDLT wall switch.
+
+    The label command targets a lighting group address and a
+    flavour (button index, 0-3).  Text is limited to 16 ASCII
+    characters.  Use ``--clear`` to revert to the unit default.
+
+    Returns:
+        0 on success, 2 on connection error, 3 if PCI rejects.
+    """
+    group = args.group
+    network = args.network
+    flavour = args.flavour
+    language = _LANGUAGE_MAP.get(args.language, LabelLanguage.ENGLISH)
+
+    if args.action == "set":
+        text = args.text
+        if text is None:
+            print("Error: --text is required for 'set' action.", file=sys.stderr)
+            return 1
+        cmd = lighting_label(
+            group=group,
+            text=text,
+            flavour=flavour,
+            language=language,
+            network=network,
+        )
+        desc = (
+            f"Label SET — group {group}, flavour {flavour}, "
+            f'text="{text}" ({len(text)} chars)'
+        )
+    elif args.action == "clear":
+        cmd = lighting_clear_label(
+            group=group,
+            flavour=flavour,
+            language=language,
+            network=network,
+        )
+        desc = f"Label CLEAR — group {group}, flavour {flavour}"
+    else:
+        print(f"Unknown action: {args.action}", file=sys.stderr)
+        return 1
+
+    async def _run() -> int:
+        protocol = await _connect(args.host, args.port)
+        try:
+            return await _send_and_report(protocol, cmd, desc)
+        finally:
+            await protocol.disconnect()
+            print("Disconnected.")
+
+    return asyncio.run(_run())
+
+
+# ===================================================================
 # monitor — listen for all SAL events
 # ===================================================================
 
@@ -537,6 +617,36 @@ def cmd_build(args: argparse.Namespace) -> int:
         action_sel = getattr(args, "action_selector", 0)
         cmd = trigger_event(group=group, action=action_sel, network=network)
         desc = f"Trigger — group {group}, action {action_sel}"
+    elif args.action == "label":
+        text = getattr(args, "text", None)
+        if text is None:
+            print("Error: --text is required for 'label' build.", file=sys.stderr)
+            return 1
+        flavour = getattr(args, "flavour", 0)
+        lang_name = getattr(args, "language", "en")
+        language = _LANGUAGE_MAP.get(lang_name, LabelLanguage.ENGLISH)
+        cmd = lighting_label(
+            group=group,
+            text=text,
+            flavour=flavour,
+            language=language,
+            network=network,
+        )
+        desc = (
+            f"Label SET — group {group}, flavour {flavour}, "
+            f'text="{text}" ({len(text)} chars)'
+        )
+    elif args.action == "clear-label":
+        flavour = getattr(args, "flavour", 0)
+        lang_name = getattr(args, "language", "en")
+        language = _LANGUAGE_MAP.get(lang_name, LabelLanguage.ENGLISH)
+        cmd = lighting_clear_label(
+            group=group,
+            flavour=flavour,
+            language=language,
+            network=network,
+        )
+        desc = f"Label CLEAR — group {group}, flavour {flavour}"
     else:
         print(f"Unknown action: {args.action}", file=sys.stderr)
         return 1
@@ -791,6 +901,62 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # ---------------------------------------------------------------
+    # label — eDLT label commands (Lighting application)
+    # ---------------------------------------------------------------
+    label_p = sub.add_parser(
+        "label",
+        help="Set or clear eDLT labels on DLT wall switches.",
+        description=(
+            "Set or clear text labels on Clipsal eDLT (Electronic "
+            "Dynamic Labelling Technology) wall switches.  Labels "
+            "are part of the Lighting application (app 56).  "
+            "Each button on a multi-button DLT unit is addressed "
+            "by a flavour (0-3).  Text is limited to 16 ASCII characters."
+        ),
+    )
+    label_p.add_argument(
+        "action",
+        choices=["set", "clear"],
+        help=(
+            "set: apply a text label (requires --text).  "
+            "clear: revert to the unit's default label."
+        ),
+    )
+    _add_connection_args(label_p)
+    _add_group_arg(label_p)
+    label_p.add_argument(
+        "--text",
+        "-t",
+        type=str,
+        default=None,
+        help=(
+            "Label text, up to 16 ASCII characters.  "
+            "Required for 'set', ignored for 'clear'."
+        ),
+    )
+    label_p.add_argument(
+        "--flavour",
+        "-f",
+        type=int,
+        default=0,
+        help=(
+            "Button flavour (0-3, default: 0).  Multi-button DLT "
+            "units use flavours to address individual buttons."
+        ),
+    )
+    label_p.add_argument(
+        "--language",
+        "-L",
+        type=str,
+        default="en",
+        choices=list(_LANGUAGE_MAP.keys()),
+        help=(
+            "Language code for the label (default: en).  "
+            "Common values: en, en-au, en-uk, en-us, fr, de."
+        ),
+    )
+
+    # ---------------------------------------------------------------
     # monitor — live event stream
     # ---------------------------------------------------------------
     monitor_p = sub.add_parser(
@@ -859,11 +1025,15 @@ def build_parser() -> argparse.ArgumentParser:
             "enable-on",
             "enable-off",
             "trigger",
+            "label",
+            "clear-label",
         ],
         help=(
             "on/off/ramp/terminate: lighting commands.  "
             "enable-on/enable-off: enable control.  "
-            "trigger: trigger event."
+            "trigger: trigger event.  "
+            "label: set eDLT text label (requires --text).  "
+            "clear-label: clear an eDLT label."
         ),
     )
     _add_group_arg(build_p)
@@ -895,6 +1065,28 @@ def build_parser() -> argparse.ArgumentParser:
         default=0,
         dest="action_selector",
         help="Action selector for trigger build (0-255).",
+    )
+    build_p.add_argument(
+        "--text",
+        "-t",
+        type=str,
+        default=None,
+        help="Label text for eDLT build, up to 16 ASCII characters.",
+    )
+    build_p.add_argument(
+        "--flavour",
+        "-f",
+        type=int,
+        default=0,
+        help="Button flavour for label build (0-3, default: 0).",
+    )
+    build_p.add_argument(
+        "--language",
+        "-L",
+        type=str,
+        default="en",
+        choices=list(_LANGUAGE_MAP.keys()),
+        help="Language code for label build (default: en).",
     )
 
     # ---------------------------------------------------------------
@@ -968,6 +1160,7 @@ def main(argv: list[str] | None = None) -> int:
         "light": cmd_light,
         "switch": cmd_switch,
         "trigger": cmd_trigger,
+        "label": cmd_label,
         "monitor": cmd_monitor,
         "status": cmd_status,
         "build": cmd_build,

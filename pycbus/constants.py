@@ -145,6 +145,78 @@ RAMP_DURATIONS: list[tuple[int, LightingCommand]] = sorted(
 )
 
 
+class LabelOption(IntEnum):
+    """Bit-field values for the Label command <Options> byte.
+
+    The Options byte immediately follows the group address in a Label
+    SAL command.  Its bit layout (Chapter 02, s2.6.5)::
+
+        Bit 0   : Must be 0 (for Lighting)
+        Bits 2-1: Label type:
+                    00 = text label
+                    01 = predefined icon
+                    10 = load dynamic icon
+                    11 = set preferred language
+        Bit 3   : Must be 0
+        Bit 4   : Reserved, must be 0
+        Bits 6-5: Flavour (0-3) — selects which button on a multi-button
+                  DLT switch.  Only buttons whose stored flavour matches
+                  the command flavour are updated.
+        Bit 7   : Reserved, must be 0 (except during dynamic icon load)
+
+    Typical usage: ``LabelOption.TEXT_LABEL | (flavour << 5)``.
+
+    Reference: *Chapter 02 — C-Bus Lighting Application*, s2.6.5.
+    """
+
+    TEXT_LABEL = 0x00  # bits 2:1 = 00
+    PREDEFINED_ICON = 0x02  # bits 2:1 = 01
+    DYNAMIC_ICON = 0x04  # bits 2:1 = 10
+    SET_PREFERRED_LANGUAGE = 0x06  # bits 2:1 = 11
+
+
+class LabelLanguage(IntEnum):
+    """Language codes for Label commands.
+
+    When sending a text label, the Language byte tells the DLT unit
+    which locale the text is for.  Units display labels in the
+    currently-selected preferred language, falling back to English
+    (0x01) if no label exists in the preferred language.
+
+    Only the most commonly-used codes are enumerated here.
+    The full table is in Chapter 02, s2.4.3.
+
+    Reference: *Chapter 02 — C-Bus Lighting Application*, s2.4.3.
+    """
+
+    ENGLISH = 0x01
+    ENGLISH_AU = 0x02
+    ENGLISH_NZ = 0x08
+    ENGLISH_UK = 0x0C
+    ENGLISH_US = 0x0D
+    FRENCH = 0x4A
+    GERMAN = 0x50
+    ITALIAN = 0x56
+    DUTCH = 0x45
+    SPANISH = 0x68
+    CHINESE = 0xCA
+
+
+# Label command encoding constants.
+#
+# The label opcode is a *long-form* command: %101LLLLL where the 5-bit
+# L field is the byte count of the arguments that follow.  The mask
+# 0xA0 = %10100000 encodes the command type, and the lower 5 bits
+# encode the argument count.
+LABEL_OPCODE_MASK = 0xA0
+
+# Maximum label text length per the spec (16 ASCII bytes).
+LABEL_MAX_TEXT_LENGTH = 16
+
+# Minimum argument count: group (1) + options (1) + language (1) = 3.
+LABEL_MIN_ARG_COUNT = 3
+
+
 class EnableCommand(IntEnum):
     """SAL opcodes for the Enable Control application (app 203 / 0xCB).
 

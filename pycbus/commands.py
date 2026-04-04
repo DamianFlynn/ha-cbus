@@ -29,6 +29,8 @@ from dataclasses import dataclass
 from .applications import get_sal_command_size
 from .applications.enable import off as enable_off
 from .applications.enable import on as enable_on
+from .applications.lighting import clear_label as lighting_clear_label
+from .applications.lighting import label as lighting_label
 from .applications.lighting import off as lighting_off
 from .applications.lighting import on as lighting_on
 from .applications.lighting import ramp as lighting_ramp
@@ -50,6 +52,8 @@ __all__ = [
     "enable_off",
     "enable_on",
     "is_status_reply",
+    "lighting_clear_label",
+    "lighting_label",
     "lighting_off",
     "lighting_on",
     "lighting_ramp",

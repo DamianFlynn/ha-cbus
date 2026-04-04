@@ -203,3 +203,60 @@ class TestCliMisc:
         """No arguments should print help and exit 0."""
         exit_code = main([])
         assert exit_code == 0
+
+
+class TestCliBuildLabel:
+    """Tests for the ``build label`` and ``build clear-label`` sub-commands."""
+
+    def test_build_label(self, capsys) -> None:  # type: ignore[no-untyped-def]
+        """``build label --group 129 --text Hello`` should exit 0."""
+        exit_code = main(
+            ["build", "label", "--group", "129", "--text", "Hello"]
+        )
+        assert exit_code == 0
+        output = capsys.readouterr().out
+        assert "Label SET" in output
+        assert "129" in output
+        assert "Hello" in output
+        assert "valid" in output
+
+    def test_build_label_with_flavour(self, capsys) -> None:  # type: ignore[no-untyped-def]
+        """``--flavour 2`` should be accepted."""
+        exit_code = main(
+            ["build", "label", "--group", "10", "--text", "Hi", "--flavour", "2"]
+        )
+        assert exit_code == 0
+        output = capsys.readouterr().out
+        assert "flavour 2" in output
+
+    def test_build_label_with_language(self, capsys) -> None:  # type: ignore[no-untyped-def]
+        """``--language en-au`` should be accepted."""
+        exit_code = main(
+            [
+                "build", "label",
+                "--group", "10",
+                "--text", "G'day",
+                "--language", "en-au",
+            ]
+        )
+        assert exit_code == 0
+
+    def test_build_label_missing_text(self, capsys) -> None:  # type: ignore[no-untyped-def]
+        """``build label`` without ``--text`` should return exit 1."""
+        exit_code = main(["build", "label", "--group", "1"])
+        assert exit_code == 1
+
+    def test_build_clear_label(self, capsys) -> None:  # type: ignore[no-untyped-def]
+        """``build clear-label --group 129`` should exit 0."""
+        exit_code = main(["build", "clear-label", "--group", "129"])
+        assert exit_code == 0
+        output = capsys.readouterr().out
+        assert "Label CLEAR" in output
+        assert "valid" in output
+
+    def test_build_clear_label_with_flavour(self, capsys) -> None:  # type: ignore[no-untyped-def]
+        """Clear with flavour should be accepted."""
+        exit_code = main(
+            ["build", "clear-label", "--group", "10", "--flavour", "3"]
+        )
+        assert exit_code == 0

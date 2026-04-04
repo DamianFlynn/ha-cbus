@@ -92,6 +92,58 @@ Duplicate entries for the same host are detected and rejected.
 | **Sensor** | Measurement (app 0xE4) | SNEL light-level broadcasts — parser exists in pycbus |
 | **Climate** | HVAC Actuator | Future |
 
+### Planned services — eDLT label support
+
+The `pycbus` library supports sending **eDLT label** commands
+(Lighting Application long-form SAL, Chapter 02 §2.6.5). This allows
+updating the text displayed on C-Bus eDLT (Electronic Dynamic
+Labelling Technology) wall switches at runtime.
+
+**Planned integration approach:**
+
+Labels are **write-only** — there is no state to poll or cache, so
+they don't map to an entity platform. Instead, expose a Home
+Assistant **service**:
+
+```yaml
+# Example service call
+service: cbus.set_label
+data:
+  group: 1
+  text: "Good Night"    # up to 16 ASCII characters
+  flavour: 0            # 0–3 for multi-button DLT units (optional)
+  language: "en"        # optional, defaults to English
+```
+
+| Item | Detail |
+|---|---|
+| **Service name** | `cbus.set_label` |
+| **Parameters** | `group` (int), `text` (str, max 16 chars), `flavour` (int 0–3, optional), `language` (str, optional) |
+| **Clear label** | Call with empty `text: ""` to clear a button label |
+| **Library API** | `pycbus.applications.lighting.label()` / `clear_label()` |
+| **CLI equivalent** | `cbus build label --group 1 --text "Good Night"` |
+
+**Automation example** — update DLT labels at sunset:
+
+```yaml
+automation:
+  - alias: "Update DLT labels at sunset"
+    trigger:
+      - platform: sun
+        event: sunset
+    action:
+      - service: cbus.set_label
+        data:
+          group: 1
+          flavour: 0
+          text: "Good Night"
+      - service: cbus.set_label
+        data:
+          group: 1
+          flavour: 1
+          text: "All Off"
+```
+
 ## Architecture
 
 ```

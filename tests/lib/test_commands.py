@@ -621,3 +621,164 @@ class TestMeasurementParser:
         )
         with pytest.raises(AttributeError):
             m.device_id = 2  # type: ignore[misc]
+
+
+# ===================================================================
+# Label (eDLT) command builders
+# ===================================================================
+
+
+class TestLightingLabel:
+    """Tests for lighting label (eDLT) command builders.
+
+    Reference: *Chapter 02 — C-Bus Lighting Application*, s2.6.5.
+    The Label command is a long-form SAL command: %101LLLLL where
+    LLLLL = argument byte count (group + options + language + text).
+    """
+
+    def test_label_checksum_valid(self) -> None:
+        """Label command should have a valid checksum."""
+        from pycbus.commands import lighting_label
+
+        cmd = lighting_label(group=129, text="Hello")
+        assert verify(cmd)
+
+    def test_label_structure_basic(self) -> None:
+        """Label command byte layout: DAT, app, net, opcode, group, opts, lang, text."""
+        from pycbus.commands import lighting_label
+
+        cmd = lighting_label(group=10, text="Test")
+        assert cmd[0] == 0x05  # DAT BROADCAST
+        assert cmd[1] == 0x38  # Lighting app
+        assert cmd[2] == 0x00  # network 0
+        # opcode: 0xA0 | (3 + len("Test")) = 0xA0 | 7 = 0xA7
+        assert cmd[3] == 0xA7
+        assert cmd[4] == 10  # group address
+        assert cmd[5] == 0x00  # options: text label, flavour 0
+        assert cmd[6] == 0x01  # language: English
+        assert cmd[7:11] == b"Test"  # text bytes
+
+    def test_label_opcode_encodes_length(self) -> None:
+        """The opcode's low 5 bits should be 3 + len(text)."""
+        from pycbus.commands import lighting_label
+
+        for text in ["", "A", "Hello World!1234"]:
+            cmd = lighting_label(group=1, text=text)
+            expected = 0xA0 | (3 + len(text))
+            assert cmd[3] == expected, f"text={text!r}: expected 0x{expected:02X}"
+
+    def test_label_flavour_encoding(self) -> None:
+        """Flavour (0-3) should be encoded in bits 6:5 of the options byte."""
+        from pycbus.commands import lighting_label
+
+        for flavour in range(4):
+            cmd = lighting_label(group=1, text="Hi", flavour=flavour)
+            assert cmd[5] == (flavour << 5)
+
+    def test_label_language_byte(self) -> None:
+        """Language code should appear as the third argument byte."""
+        from pycbus.commands import lighting_label
+        from pycbus.constants import LabelLanguage
+
+        cmd = lighting_label(group=1, text="G'day", language=LabelLanguage.ENGLISH_AU)
+        assert cmd[6] == 0x02  # English (Australia)
+
+    def test_label_network_parameter(self) -> None:
+        """Network number should be the third byte."""
+        from pycbus.commands import lighting_label
+
+        cmd = lighting_label(group=1, text="Hi", network=254)
+        assert cmd[2] == 254
+
+    def test_label_max_text_length(self) -> None:
+        """16-character text should be accepted."""
+        from pycbus.commands import lighting_label
+
+        cmd = lighting_label(group=1, text="1234567890ABCDEF")
+        assert verify(cmd)
+        # opcode: 0xA0 | (3 + 16) = 0xA0 | 19 = 0xB3
+        assert cmd[3] == 0xB3
+
+    def test_label_text_too_long_raises(self) -> None:
+        """Text exceeding 16 characters should raise ValueError."""
+        from pycbus.commands import lighting_label
+
+        with pytest.raises(ValueError, match="exceeds 16"):
+            lighting_label(group=1, text="12345678901234567")
+
+    def test_label_invalid_flavour_raises(self) -> None:
+        """Flavour outside 0-3 should raise ValueError."""
+        from pycbus.commands import lighting_label
+
+        with pytest.raises(ValueError, match="Flavour must be 0-3"):
+            lighting_label(group=1, text="Hi", flavour=4)
+        with pytest.raises(ValueError, match="Flavour must be 0-3"):
+            lighting_label(group=1, text="Hi", flavour=-1)
+
+    def test_clear_label_is_empty_text(self) -> None:
+        """clear_label should produce a label command with zero text bytes."""
+        from pycbus.commands import lighting_clear_label
+
+        cmd = lighting_clear_label(group=10, flavour=1)
+        assert verify(cmd)
+        # opcode: 0xA0 | 3 = 0xA3 (group + options + language, no text)
+        assert cmd[3] == 0xA3
+        # Options: text label + flavour 1 (bit 5 set)
+        assert cmd[5] == (1 << 5)
+        # No text bytes — command ends at language + checksum
+        assert len(cmd) == 8  # DAT + app + net + opcode + grp + opts + lang + chk
+
+    def test_label_matches_cgate_mqtt_example(self) -> None:
+        """Verify a label frame matching the cgate-mqtt 'Hello' example.
+
+        cgate-mqtt sends: lighting label 254/56 1 129 - 0 48656C6C6F
+        Which is: group=129, button (flavour)=0, text='Hello', hex-encoded.
+
+        Our SAL frame should contain the same text bytes and target the
+        same group on the default network.
+        """
+        from pycbus.commands import lighting_label
+
+        cmd = lighting_label(group=129, text="Hello")
+        assert verify(cmd)
+        assert cmd[1] == 0x38  # Lighting app
+        assert cmd[4] == 129  # group 129
+        assert cmd[5] == 0x00  # flavour 0
+        # text starts at byte 7
+        assert cmd[7:12] == b"Hello"
+
+
+class TestLightingSalSizeLabel:
+    """Test sal_size correctly handles label (long-form) opcodes."""
+
+    def test_sal_size_label_short_text(self) -> None:
+        """Label opcode with 4-char text: 0xA7 -> 1 + 7 = 8 bytes."""
+        from pycbus.applications.lighting import sal_size
+
+        # 0xA7 = 0xA0 | 7, meaning 7 argument bytes follow
+        assert sal_size(0xA7) == 8
+
+    def test_sal_size_label_empty_text(self) -> None:
+        """Label opcode with no text: 0xA3 -> 1 + 3 = 4 bytes."""
+        from pycbus.applications.lighting import sal_size
+
+        assert sal_size(0xA3) == 4
+
+    def test_sal_size_label_max_text(self) -> None:
+        """Label opcode with 16-char text: 0xB3 -> 1 + 19 = 20 bytes."""
+        from pycbus.applications.lighting import sal_size
+
+        assert sal_size(0xB3) == 20
+
+    def test_sal_size_ramp_still_works(self) -> None:
+        """Ramp opcode should still return 3 bytes."""
+        from pycbus.applications.lighting import sal_size
+
+        assert sal_size(0x02) == 3  # RAMP_INSTANT
+
+    def test_sal_size_on_off_still_works(self) -> None:
+        """ON/OFF should still return 2 bytes."""
+        from pycbus.applications.lighting import sal_size
+
+        assert sal_size(0x79) == 2  # ON
+        assert sal_size(0x01) == 2  # OFF
