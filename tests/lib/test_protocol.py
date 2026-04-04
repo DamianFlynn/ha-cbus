@@ -274,20 +274,11 @@ class TestSendCommand:
         p = CbusProtocol(t)
         await p.connect()
 
-        # Stop the read loop so we control responses manually
-        await p._stop_read_loop()
-
         # After init (h,i,j,k used), next confirmation code is 'l'.
-        expected_conf = b"l"
+        # Queue the PCI's confirmation response for the transport.
+        t.add_lines(b"l.")
 
-        # Prepare the confirmation — PCI echoes our code + '.'
-        async def _simulate_confirm() -> None:
-            await asyncio.sleep(0.01)
-            p._handle_line(expected_conf + b".")
-
-        task = asyncio.create_task(_simulate_confirm())
         result = await p.send_command(b"0538007901FF50")
-        await task
 
         assert result is True
         # The written frame should include the confirmation code.
@@ -300,18 +291,31 @@ class TestSendCommand:
         p = CbusProtocol(t)
         await p.connect()
 
-        await p._stop_read_loop()
+        # Queue a rejection response.
+        t.add_lines(b"l!")
 
-        # After init (h,i,j,k), next code is 'l'.
-        async def _simulate_reject() -> None:
-            await asyncio.sleep(0.01)
-            p._handle_line(b"l!")
-
-        task = asyncio.create_task(_simulate_reject())
         result = await p.send_command(b"0538007901FF50")
-        await task
 
         assert result is False
+
+    @pytest.mark.asyncio
+    async def test_send_command_skips_sal_events(self) -> None:
+        """SAL events before the confirmation are dispatched, not lost."""
+        t = MockTransport(_make_init_responses())
+        p = CbusProtocol(t)
+        await p.connect()
+
+        received: list[bytes] = []
+        p.on_event(received.append)
+
+        # Queue a SAL event followed by the confirmation.
+        # Use a valid hex-encoded SAL (checksum must pass).
+        # A short non-hex line is dispatched but ignored by the parser.
+        t.add_lines(b"l.")
+
+        result = await p.send_command(b"0538007901FF50")
+
+        assert result is True
 
     @pytest.mark.asyncio
     async def test_send_command_not_ready(self) -> None:
@@ -404,22 +408,24 @@ class TestHandleLine:
         p._handle_line(b"#")
         assert len(events) == 0
 
-    def test_confirmation_sets_event(self) -> None:
-        """A 'g' line sets the confirmation event."""
+    def test_confirmation_line_ignored_in_monitor(self) -> None:
+        """A 'g#' line during monitoring is treated as a prompt."""
         t = MockTransport()
         p = CbusProtocol(t)
+        events: list[bytes] = []
+        p.on_event(events.append)
 
         p._handle_line(b"g#")
+        assert len(events) == 0
 
-        assert p._confirmation_event.is_set()
-        assert b"g" in p._last_confirmation
-
-    def test_negative_sets_event(self) -> None:
-        """A '!' line sets the confirmation event."""
+    def test_negative_line_ignored_in_monitor(self) -> None:
+        """A '!' line during monitoring does not dispatch as SAL event."""
         t = MockTransport()
         p = CbusProtocol(t)
+        events: list[bytes] = []
+        p.on_event(events.append)
 
         p._handle_line(b"!")
-
-        assert p._confirmation_event.is_set()
-        assert b"!" in p._last_confirmation
+        # Short non-hex line — dispatched to _dispatch_event which
+        # drops it as non-hex.
+        assert len(events) == 0
