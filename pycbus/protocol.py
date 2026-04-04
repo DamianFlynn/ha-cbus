@@ -62,8 +62,7 @@ from typing import TYPE_CHECKING
 
 from .checksum import verify
 from .commands import (
-    GROUPS_PER_BLOCK,
-    STATUS_BLOCK_COUNT,
+    is_status_reply,
     parse_status_reply,
     status_request,
 )
@@ -171,11 +170,9 @@ class CbusProtocol:
         self._status_callbacks: list[StatusCallback] = []
         self._read_task: asyncio.Task[None] | None = None
         self._command_lock = asyncio.Lock()
-        # Pending status request: accumulates block replies.
+        # Pending status request: accumulates reply data.
         self._status_pending_app: int | None = None
         self._status_levels: dict[tuple[int, int], int] = {}
-        self._status_blocks_remaining: int = 0
-        self._status_done = asyncio.Event()
         # Confirmation code index — cycles through _CONFIRMATION_CODES.
         self._next_confirmation_index: int = 0
 
@@ -229,19 +226,24 @@ class CbusProtocol:
         app_id: int,
         timeout: float = 10.0,
     ) -> dict[tuple[int, int], int]:
-        """Request the current level of all groups for an application.
+        """Request the binary status of all groups for an application.
 
-        Sends binary status requests for all 3 blocks (covering groups
-        0-255) and reads the replies inline (same pattern as
-        :meth:`send_command`).
+        Sends a single binary status request (``$7A``) to the
+        STATUS_REQUEST pseudo-application (``0xFF``).  The PCI responds
+        with multiple CAL reply lines covering all 256 groups.
+
+        In SMART mode the command needs a confirmation code.  The reply
+        lines arrive as standard or extended CAL data depending on the
+        EXSTAT option.
 
         Args:
             app_id: Application ID to query
                     (e.g. ``ApplicationId.LIGHTING``).
-            timeout: Maximum seconds to wait for all 3 block replies.
+            timeout: Maximum seconds to wait for all reply lines.
 
         Returns:
-            Dict mapping ``(app_id, group_address)`` to level (0-255).
+            Dict mapping ``(app_id, group_address)`` to state
+            (255 = ON, 0 = OFF).
 
         Raises:
             CbusConnectionError: If not in READY state.
@@ -252,65 +254,61 @@ class CbusProtocol:
             )
 
         async with self._command_lock:
-            # Set up accumulator for status replies.
             self._status_pending_app = app_id
             self._status_levels = {}
-            self._status_blocks_remaining = STATUS_BLOCK_COUNT
-            self._status_done.clear()
 
-            # Pause the read loop so we can read replies directly.
             await self._stop_read_loop()
 
             try:
-                # Send all 3 block requests with confirmation codes.
-                # In SMART mode the PCI requires a confirmation code on
-                # every command, including status requests.
-                for block in range(STATUS_BLOCK_COUNT):
-                    cmd = status_request(app_id, block)
-                    hex_payload = cmd.hex().upper().encode()
-                    conf = self._get_confirmation_code()
-                    await self._send_frame(hex_payload + conf)
-                    _LOGGER.debug(
-                        "Sent status request: app=0x%02X block=%d conf=%s",
-                        app_id,
-                        block,
-                        conf.decode(),
-                    )
+                # Send one binary status request with confirmation code.
+                cmd = status_request(app_id)
+                hex_payload = cmd.hex().upper().encode()
+                conf = self._get_confirmation_code()
+                await self._send_frame(hex_payload + conf)
+                _LOGGER.debug(
+                    "Sent binary status request: app=0x%02X conf=%s",
+                    app_id,
+                    conf.decode(),
+                )
 
-                # Read lines until all blocks are received or timeout.
+                # Read reply lines until the transport times out
+                # (indicating no more data).  The PCI sends 3+ lines
+                # of CAL data for one binary status request.
                 deadline = time.monotonic() + timeout
-                while self._status_blocks_remaining > 0:
+                for _ in range(20):  # safety limit
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
+                        _LOGGER.info("Status deadline reached")
                         break
                     try:
                         line = await self._transport.read_line()
                     except CbusTimeoutError:
-                        _LOGGER.info(
-                            "Status read timeout (app 0x%02X, %d blocks pending)",
+                        _LOGGER.debug(
+                            "Status read timeout — end of replies "
+                            "(app 0x%02X, %d groups received)",
                             app_id,
-                            self._status_blocks_remaining,
+                            len(self._status_levels),
                         )
                         break
                     _LOGGER.debug("STATUS RX: %r", line)
-                    self._handle_line(line)
 
-                if self._status_blocks_remaining > 0:
-                    _LOGGER.warning(
-                        "Status request incomplete for app 0x%02X "
-                        "(%d of %d blocks received)",
-                        app_id,
-                        STATUS_BLOCK_COUNT - self._status_blocks_remaining,
-                        STATUS_BLOCK_COUNT,
-                    )
+                    # Strip a leading confirmation code if present.
+                    # The PCI prepends conf+result to the first reply.
+                    text = line
+                    if conf in text:
+                        idx = text.find(conf)
+                        # Skip conf + result char (e.g. "l.")
+                        text = text[idx + 2 :]
+                        if not text:
+                            continue  # confirmation-only line
+
+                    self._process_status_line(text, app_id)
 
             finally:
                 result = dict(self._status_levels)
                 self._status_pending_app = None
-                # Always restart the read loop.
                 self._start_read_loop()
 
-        # Dispatch to status callbacks.
         for callback in tuple(self._status_callbacks):
             try:
                 callback(result)
@@ -318,6 +316,41 @@ class CbusProtocol:
                 _LOGGER.exception("Error in status callback")
 
         return result
+
+    def _process_status_line(self, line: bytes, app_id: int) -> None:
+        """Try to parse a line as a status reply and accumulate results."""
+        try:
+            decoded = bytes.fromhex(line.decode("ascii"))
+        except (ValueError, UnicodeDecodeError):
+            _LOGGER.debug("Status: non-hex line ignored: %r", line)
+            return
+
+        # Verify checksum of the entire decoded blob.
+        if len(decoded) > 1 and not verify(decoded):
+            _LOGGER.debug("Status: checksum mismatch: %s", decoded.hex())
+            return
+
+        if not is_status_reply(decoded):
+            _LOGGER.debug("Status: non-status line ignored: %s", decoded.hex())
+            return
+
+        reply_app, levels = parse_status_reply(decoded)
+        if reply_app != app_id:
+            _LOGGER.debug(
+                "Status: reply for app 0x%02X (expected 0x%02X), ignoring",
+                reply_app,
+                app_id,
+            )
+            return
+
+        _LOGGER.debug(
+            "Status reply: app=0x%02X, %d groups in this line",
+            reply_app,
+            len(levels),
+        )
+        for group, level in levels.items():
+            if group < 256:
+                self._status_levels[(app_id, group)] = level
 
     async def connect(self) -> None:
         """Connect to the PCI/CNI, reset, and run the init sequence.
@@ -745,9 +778,10 @@ class CbusProtocol:
             _LOGGER.debug("Checksum mismatch, ignoring: %s", decoded.hex())
             return
 
-        # Status replies have a PM reply header: top 5 bits = 11011 (0xD8).
-        # Specifically 0xD8-0xDF depending on the source address field.
-        if len(decoded) >= 4 and (decoded[0] & 0xF8) == 0xD8:
+        # Status replies have a CAL reply header: top 2 bits = 11.
+        # Standard: 0xC0-0xDF (top 3 bits = 110)
+        # Extended: 0xE0-0xFF (top 3 bits = 111)
+        if is_status_reply(decoded):
             self._handle_status_reply(decoded)
             return
 
@@ -769,8 +803,7 @@ class CbusProtocol:
             decoded: Raw decoded bytes of the status reply
                      (checksum already verified).
         """
-        app_id = decoded[1] if len(decoded) > 1 else 0
-        levels = parse_status_reply(decoded)
+        app_id, levels = parse_status_reply(decoded)
 
         if not levels:
             _LOGGER.debug("Empty or unparseable status reply: %s", decoded.hex())
@@ -784,23 +817,15 @@ class CbusProtocol:
         )
 
         if self._status_pending_app is not None and self._status_pending_app == app_id:
-            # This is a reply to our status request.
-            # Calculate the block offset from the position in the sequence.
-            block = STATUS_BLOCK_COUNT - self._status_blocks_remaining
-            base_group = block * GROUPS_PER_BLOCK
-            for offset, level in levels.items():
-                group = base_group + offset
+            # Accumulate into pending status request.
+            for group, level in levels.items():
                 if group < 256:
                     self._status_levels[(app_id, group)] = level
-
-            self._status_blocks_remaining -= 1
-            if self._status_blocks_remaining <= 0:
-                self._status_done.set()
         else:
             # Unsolicited status update — dispatch to status callbacks.
             result: dict[tuple[int, int], int] = {}
-            for offset, level in levels.items():
-                result[(app_id, offset)] = level
+            for group, level in levels.items():
+                result[(app_id, group)] = level
             for callback in tuple(self._status_callbacks):
                 try:
                     callback(result)

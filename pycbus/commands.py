@@ -268,137 +268,199 @@ def trigger_event(group: int, action: int = 0, network: int = 0) -> bytes:
 # Status Requests — query current group levels
 # ------------------------------------------------------------------
 
-# Number of groups per status block.  With EXSTAT each group gets 2 bytes
-# in the reply; block 0 covers groups 0-87, block 1 covers 88-175,
-# block 2 covers 176-255.
-GROUPS_PER_BLOCK = 88
+# Binary status request opcode ($7A) — reports ON/OFF/ERROR per group.
+_BINARY_STATUS_OPCODE = 0x7A
 
-# Status request opcode (binary status request).
-_STATUS_REQUEST_OPCODE = 0x73
-
-# Number of blocks needed to cover all 256 groups.
-STATUS_BLOCK_COUNT = 3
+# Status requests are SAL commands sent to the STATUS_REQUEST
+# pseudo-application (0xFF).  The PCI replies with 3+ CAL reply lines
+# covering all 256 groups.  One request is sufficient.
+#
+# Reference: C-Bus Serial Interface User Guide, s4.3.3.2
 
 
-def status_request(app_id: int, block: int = 0) -> bytes:
+def status_request(app_id: int) -> bytes:
     """Build a binary status request for an application.
 
-    Asks the PCI for the current levels of all groups in the specified
-    block.  Three blocks cover all 256 group addresses:
+    Sends a point-to-multipoint SAL command to the STATUS_REQUEST
+    pseudo-application (``0xFF``).  The PCI responds with multiple
+    CAL reply lines covering all 256 group addresses.
 
-    - Block 0: groups 0-87
-    - Block 1: groups 88-175
-    - Block 2: groups 176-255
+    Wire format (example for Lighting app 0x38)::
 
-    The PCI will reply with a binary (or extended-binary, if EXSTAT is
-    enabled) status reply containing the level for each group.
+        \\05FF007A38004A\\r
 
-    Wire format::
+    Byte layout::
 
-        \\FF <app> 73 <block> <checksum> \\r
+        05   — DAT (broadcast, point-to-multipoint)
+        FF   — Application = STATUS_REQUEST pseudo-app
+        00   — Network (default)
+        7A   — Binary status request opcode
+        <app> — Target application to query
+        00   — Starting group address (0 = all groups)
+        <chk> — Checksum
+
+    Reference: C-Bus Serial Interface User Guide, page 22-23.
 
     Args:
         app_id: Application ID to query (e.g. ``ApplicationId.LIGHTING``).
-        block:  Block number (0, 1, or 2).
 
     Returns:
-        5-byte command: 0xFF + app + 0x73 + block + checksum.
-
-    Raises:
-        ValueError: If block is not 0, 1, or 2.
+        7-byte command: DAT + 0xFF + net + 0x7A + app + 0x00 + checksum.
     """
-    if block not in (0, 1, 2):
-        msg = f"Block must be 0, 1, or 2, got {block}"
-        raise ValueError(msg)
-
-    return _build_pm_command(0xFF, app_id, _STATUS_REQUEST_OPCODE, block)
+    return _build_pm_command(
+        PointToMultipointDAT.BROADCAST,
+        0xFF,  # STATUS_REQUEST pseudo-application
+        0x00,  # network
+        _BINARY_STATUS_OPCODE,
+        app_id,
+        0x00,  # starting group address
+    )
 
 
 # ------------------------------------------------------------------
 # Status Reply Parsing
 # ------------------------------------------------------------------
 
-# Reply coding bytes — indicate the type of status reply.
-# The coding byte appears after the PM header in the response.
-_BINARY_STATUS_CODING = 0xC0  # standard binary (1 byte per group)
-_EXTENDED_BINARY_CODING = 0xE0  # extended binary (2 bytes per group, EXSTAT)
+# Long-form CAL reply header byte.
+# In SMART + EXSTAT mode, the PCI wraps status replies in a
+# point-to-point long-form frame:
+#   86 <unit_addr> <SI_addr> 00 <CAL_data...> <outer_checksum>
+# Reference: C-Bus Serial Interface User Guide, s4.3.3.1.
+_LONG_FORM_HEADER = 0x86
 
 
-def parse_status_reply(data: bytes) -> dict[int, int]:
-    """Parse a binary status reply into a {group: level} dict.
+def is_status_reply(data: bytes) -> bool:
+    """Return True if *data* looks like a CAL status reply.
 
-    The PCI sends status replies as hex-encoded binary data.  After
-    hex-decoding and checksum verification (done by the protocol layer),
-    the raw bytes have this structure::
+    Handles both short-form (CAL header as first byte) and long-form
+    (``0x86`` wrapper with CAL header at offset 4).
+    """
+    if len(data) < 4:
+        return False
+    # Long-form: 86 <addr> <addr> 00 <CAL header...>
+    if data[0] == _LONG_FORM_HEADER:
+        return len(data) >= 8 and (data[4] & 0xC0) == 0xC0
+    # Short-form: CAL header directly.
+    return (data[0] & 0xC0) == 0xC0
 
-        Standard binary (no EXSTAT):
-            D8 <app> 00 C0 <levels...> <checksum>
-            Each byte in <levels> is the level for one group.
-            Bit 7 is stripped (0x00=off, 0x7F=max=255 mapped).
 
-        Extended binary (EXSTAT enabled — our default):
-            D8 <app> 00 E0 <levels...> <checksum>
-            Pairs of bytes: high-nibble, low-nibble per group.
-            Each pair gives 0-255 level.
+def parse_status_reply(
+    data: bytes,
+) -> tuple[int, dict[int, int]]:
+    """Parse a binary status reply into (app_id, {group: state}).
 
-    This function handles both formats.  It strips the header and
-    checksum and returns a dict mapping group addresses to levels.
+    Accepts both **short-form** and **long-form** CAL reply data
+    (the ``data`` should include the checksum as the last byte,
+    already verified by the caller).
 
-    The base group address is derived from the block number encoded
-    in the reply header.  However, many PCI implementations omit
-    the block number from the reply header.  We solve this by accepting
-    an opaque bytes blob and returning *relative* group offsets starting
-    from 0.  The caller (protocol/coordinator) tracks which block was
-    requested and adds the appropriate offset.
+    **Short-form** (BASIC mode or non-IDMON)::
+
+        [C0|cnt] [app] [block_start] [data...] [checksum]
+        [E0|cnt] [coding] [app] [block_start] [data...] [checksum]
+
+    **Long-form** (SMART + EXSTAT)::
+
+        86 <addr> <addr> 00 [E0|cnt] [coding] [app] [block] [data...] [chk]
+
+    The extended format coding byte indicates the data type:
+        - 0x00 / 0x40 = binary (2-bit per group)
+        - 0x07 / 0x47 = level (nibble-pair, not yet implemented)
+
+    Binary 2-bit encoding per group (LSB first in each byte):
+        - 00 = does not exist (skipped)
+        - 01 = ON  (mapped to level 255)
+        - 10 = OFF (mapped to level 0)
+        - 11 = ERROR (skipped)
+
+    Reference: C-Bus Serial Interface User Guide, s7.3-7.4.
 
     Args:
-        data: Raw decoded bytes of the status reply (checksum already
-              verified and included).
+        data: Raw decoded bytes of the status reply (with checksum
+              as the last byte, already verified).
 
     Returns:
-        Dict mapping relative group offset (0-based) to level (0-255).
-        Empty dict if the data cannot be parsed.
+        Tuple of (app_id, group_levels) where group_levels maps
+        absolute group address to level (0 or 255 for binary).
+        Returns (0, {}) if the data cannot be parsed.
     """
-    # Minimum: header(3) + coding(1) + at least 1 level + checksum(1) = 6
-    if len(data) < 6:
-        return {}
+    if len(data) < 4:
+        return 0, {}
 
-    coding = data[3]
+    # Strip long-form PP2P header if present.
+    if data[0] == _LONG_FORM_HEADER:
+        if len(data) < 8:
+            return 0, {}
+        # Inner CAL = data[4:-1] (skip header + outer checksum).
+        cal = data[4:-1]
+    elif (data[0] & 0xC0) == 0xC0:
+        # Short-form: strip trailing checksum only.
+        cal = data[:-1]
+    else:
+        return 0, {}
 
-    # Strip header (3 bytes) + coding (1 byte) and checksum (last byte).
-    payload = data[4:-1]
+    if len(cal) < 3:
+        return 0, {}
 
-    if coding & 0xE0 == 0xE0:
-        # Extended binary: two bytes per group.
-        return _parse_extended_status(payload)
-    if coding & 0xC0 == 0xC0:
-        # Standard binary: one byte per group, 7-bit levels.
-        return _parse_standard_status(payload)
+    header = cal[0]
 
-    # Unknown coding — return empty.
-    return {}
+    if (header & 0xE0) == 0xE0:
+        # Extended: [E0|cnt] [coding] [app] [block_start] [data...]
+        if len(cal) < 4:
+            return 0, {}
+        coding = cal[1]
+        app_id = cal[2]
+        block_start = cal[3]
+        payload = cal[4:]
+
+        if coding in (0x07, 0x47):
+            _LOGGER.debug(
+                "Level status reply (coding=0x%02X) not supported",
+                coding,
+            )
+            return app_id, {}
+
+        # Binary status (coding 0x00, 0x40, or others).
+        levels = _parse_binary_status(payload, block_start)
+        return app_id, levels
+
+    if (header & 0xE0) == 0xC0:
+        # Standard: [C0|cnt] [app] [block_start] [data...]
+        app_id = cal[1]
+        block_start = cal[2]
+        payload = cal[3:]
+        levels = _parse_binary_status(payload, block_start)
+        return app_id, levels
+
+    return 0, {}
 
 
-def _parse_extended_status(payload: bytes) -> dict[int, int]:
-    """Parse extended binary status (EXSTAT) payload.
+def _parse_binary_status(payload: bytes, block_start: int) -> dict[int, int]:
+    """Parse binary 2-bit-per-group status data.
 
-    Each group is represented by 2 bytes.  The first byte is the
-    level (0-255), the second byte is padding (0x00).
+    Each byte encodes 4 groups (2 bits each), from LSB to MSB:
+        bits [1:0] = group N
+        bits [3:2] = group N+1
+        bits [5:4] = group N+2
+        bits [7:6] = group N+3
+
+    Code: 00=missing, 01=ON(255), 10=OFF(0), 11=ERROR(skip).
+
+    Reference: C-Bus Serial Interface User Guide, s7.3 page 45-46.
     """
     levels: dict[int, int] = {}
-    for group, i in enumerate(range(0, len(payload) - 1, 2)):
-        levels[group] = payload[i]
+    group = block_start
+    for byte_val in payload:
+        for shift in (0, 2, 4, 6):
+            state = (byte_val >> shift) & 0x03
+            if state == 0x01:  # ON
+                levels[group] = 255
+            elif state == 0x02:  # OFF
+                levels[group] = 0
+            # 0x00 = missing, 0x03 = error — skip both
+            group += 1
+            if group >= 256:
+                break
     return levels
-
-
-def _parse_standard_status(payload: bytes) -> dict[int, int]:
-    """Parse standard binary status payload (no EXSTAT).
-
-    Each byte represents one group.  Level range is 0x00-0xFF
-    (the PCI uses the full byte range in standard mode too,
-    despite the docs suggesting 7-bit — real PCIs send 0-255).
-    """
-    return dict(enumerate(payload))
 
 
 # ------------------------------------------------------------------

@@ -141,39 +141,32 @@ class TestStatusRequest:
 
     def test_status_request_checksum_valid(self) -> None:
         """Status request should have a valid checksum."""
-        cmd = status_request(ApplicationId.LIGHTING, block=0)
+        cmd = status_request(ApplicationId.LIGHTING)
         assert verify(cmd)
 
     def test_status_request_structure(self) -> None:
-        """Status request should be: FF <app> 73 <block> <checksum>."""
-        cmd = status_request(ApplicationId.LIGHTING, block=0)
-        assert len(cmd) == 5
-        assert cmd[0] == 0xFF
-        assert cmd[1] == ApplicationId.LIGHTING
-        assert cmd[2] == 0x73
-        assert cmd[3] == 0x00
+        """Status request: 05 FF 00 7A <app> 00 <checksum>."""
+        cmd = status_request(ApplicationId.LIGHTING)
+        assert len(cmd) == 7
+        assert cmd[0] == 0x05  # DAT broadcast
+        assert cmd[1] == 0xFF  # STATUS_REQUEST pseudo-app
+        assert cmd[2] == 0x00  # network
+        assert cmd[3] == 0x7A  # binary status opcode
+        assert cmd[4] == ApplicationId.LIGHTING  # target app
+        assert cmd[5] == 0x00  # starting group
 
-    def test_status_request_block_1(self) -> None:
-        """Block 1 should be encoded in byte 3."""
-        cmd = status_request(ApplicationId.LIGHTING, block=1)
-        assert cmd[3] == 0x01
+    def test_status_request_matches_spec_example(self) -> None:
+        """Must match the example from C-Bus Serial Interface Guide p23.
 
-    def test_status_request_block_2(self) -> None:
-        """Block 2 should be encoded in byte 3."""
-        cmd = status_request(ApplicationId.LIGHTING, block=2)
-        assert cmd[3] == 0x02
+        The spec example: \\05FF007A38004A
+        """
+        cmd = status_request(ApplicationId.LIGHTING)
+        assert cmd.hex().upper() == "05FF007A38004A"
 
     def test_status_request_enable_app(self) -> None:
         """Status request for Enable app should use correct app ID."""
-        cmd = status_request(ApplicationId.ENABLE, block=0)
-        assert cmd[1] == ApplicationId.ENABLE
-
-    def test_status_request_invalid_block(self) -> None:
-        """Block outside 0-2 should raise ValueError."""
-        import pytest
-
-        with pytest.raises(ValueError, match="Block must be"):
-            status_request(ApplicationId.LIGHTING, block=3)
+        cmd = status_request(ApplicationId.ENABLE)
+        assert cmd[4] == ApplicationId.ENABLE
 
 
 # ------------------------------------------------------------------
@@ -182,47 +175,147 @@ class TestStatusRequest:
 
 
 class TestParseStatusReply:
-    """Tests for parse_status_reply."""
+    """Tests for parse_status_reply.
 
-    def test_extended_status_reply(self) -> None:
-        """Extended binary reply should parse group levels."""
-        # Header: D8 38 00, Coding: E0, then pairs of (level, 00)
-        # Groups 0,1,2 with levels 0, 128, 255
+    Status replies use CAL header format:
+    - Standard: [C0|cnt] [app] [block_start] [2-bit data...] [chk]
+    - Extended: [E0|cnt] [coding] [app] [block_start] [2-bit data...] [chk]
+
+    Binary 2-bit encoding: 00=missing, 01=ON(255), 10=OFF(0), 11=error.
+    """
+
+    def test_standard_binary_reply(self) -> None:
+        """Standard format binary status reply — groups 0-3."""
         from pycbus.checksum import checksum as cs
 
-        payload = bytes([0xD8, 0x38, 0x00, 0xE0, 0x00, 0x00, 0x80, 0x00, 0xFF, 0x00])
+        # Standard: [C0|cnt] [app] [block_start] [data] [checksum]
+        # 0x06 = 0b00000110: bits[1:0]=10(OFF), bits[3:2]=01(ON)
+        payload = bytes([0xC4, 0x38, 0x00, 0x06])
         chk = cs(payload)
         data = payload + bytes([chk])
-        result = parse_status_reply(data)
-        assert result[0] == 0x00
-        assert result[1] == 0x80
-        assert result[2] == 0xFF
+        app_id, result = parse_status_reply(data)
+        assert app_id == 0x38
+        assert result[0] == 0  # OFF
+        assert result[1] == 255  # ON
+        assert 2 not in result  # missing = skipped
+        assert 3 not in result  # missing = skipped
 
-    def test_standard_status_reply(self) -> None:
-        """Standard binary reply should parse group levels."""
+    def test_extended_binary_reply(self) -> None:
+        """Extended format binary status reply — coding=0x00."""
         from pycbus.checksum import checksum as cs
 
-        # Header: D8 38 00, Coding: C0, then one byte per group
-        payload = bytes([0xD8, 0x38, 0x00, 0xC0, 0x00, 0x80, 0xFF])
+        # Extended: [E0|cnt] [coding] [app] [block_start] [data] [chk]
+        # 0x05 = 0b00000101: bits[1:0]=01(ON), bits[3:2]=01(ON)
+        payload = bytes([0xE5, 0x00, 0x38, 0x00, 0x05])
         chk = cs(payload)
         data = payload + bytes([chk])
-        result = parse_status_reply(data)
-        assert result[0] == 0x00
-        assert result[1] == 0x80
-        assert result[2] == 0xFF
+        app_id, result = parse_status_reply(data)
+        assert app_id == 0x38
+        assert result[0] == 255  # ON
+        assert result[1] == 255  # ON
+        assert 2 not in result  # missing
+        assert 3 not in result  # missing
+
+    def test_extended_binary_elsewhere(self) -> None:
+        """Extended format with coding=0x40 (binary, elsewhere)."""
+        from pycbus.checksum import checksum as cs
+
+        # 0x09 = 0b00001001: bits[1:0]=01(ON), bits[3:2]=10(OFF)
+        payload = bytes([0xE5, 0x40, 0x38, 0x00, 0x09])
+        chk = cs(payload)
+        data = payload + bytes([chk])
+        app_id, result = parse_status_reply(data)
+        assert app_id == 0x38
+        assert result[0] == 255  # ON
+        assert result[1] == 0  # OFF
+        assert 2 not in result  # missing
+        assert 3 not in result  # missing
+
+    def test_block_start_offset(self) -> None:
+        """Groups should be offset by block_start."""
+        from pycbus.checksum import checksum as cs
+
+        # block_start=0x58 (88), data has grp88=ON
+        payload = bytes([0xC4, 0x38, 0x58, 0x01])
+        chk = cs(payload)
+        data = payload + bytes([chk])
+        app_id, result = parse_status_reply(data)
+        assert app_id == 0x38
+        assert result[88] == 255  # ON at group 88
+
+    def test_spec_example_first_line(self) -> None:
+        """Verify against the example from Serial Interface Guide p46.
+
+        First line: D8380068AA01...
+        D8=header(std, 24 bytes), 38=app, 00=block_start
+        68: grp0=miss, grp1=OFF, grp2=OFF, grp3=ON  (0b01101000)
+        AA: grp4=OFF, grp5=OFF, grp6=OFF, grp7=OFF  (0b10101010)
+        01: grp8=ON, grp9=miss, grp10=miss, grp11=miss (0b00000001)
+        """
+        from pycbus.checksum import checksum as cs
+
+        # Just the first 3 data bytes from the example
+        payload = bytes([0xC6, 0x38, 0x00, 0x68, 0xAA, 0x01])
+        chk = cs(payload)
+        data = payload + bytes([chk])
+        app_id, result = parse_status_reply(data)
+        assert app_id == 0x38
+        assert 0 not in result  # missing
+        assert result[1] == 0  # OFF
+        assert result[2] == 0  # OFF
+        assert result[3] == 255  # ON
+        assert result[4] == 0  # OFF
+        assert result[5] == 0  # OFF
+        assert result[8] == 255  # ON
+
+    def test_long_form_extended_reply(self) -> None:
+        """Long-form reply (SMART+EXSTAT): 86 <addrs> <CAL data>."""
+        from pycbus.checksum import checksum as cs
+
+        # Long-form: 86 01 01 00 <extended CAL> <checksum>
+        # Inner CAL: F9(ext,25 bytes) 00(binary,this SI) 38(app) 00(block)
+        # Then 1 data byte: 0x05 = bits[1:0]=01(ON), bits[3:2]=01(ON)
+        inner_cal = bytes([0xE5, 0x00, 0x38, 0x00, 0x05])
+        long_form = bytes([0x86, 0x01, 0x01, 0x00]) + inner_cal
+        chk = cs(long_form)
+        data = long_form + bytes([chk])
+        app_id, result = parse_status_reply(data)
+        assert app_id == 0x38
+        assert result[0] == 255  # ON
+        assert result[1] == 255  # ON
+
+    def test_long_form_real_capture(self) -> None:
+        """Parse a real captured long-form reply from live hardware.
+
+        Line: 86010100F9003800A8AAAAA6AAA6A6AAAAA6AAAA6AA9AAAA68A99A00AA02A3
+        """
+        data = bytes.fromhex(
+            "86010100F9003800A8AAAAA6AAA6A6AAAAA6AAAA6AA9AAAA68A99A00AA02A3"
+        )
+        app_id, result = parse_status_reply(data)
+        assert app_id == 0x38
+        # Should have parsed some groups.
+        assert len(result) > 0
+        # Verify some known states from the capture.
+        # Data starts at block 0: A8 = 0b10101000
+        # bits[1:0]=00(miss), bits[3:2]=10(OFF), bits[5:4]=10(OFF), bits[7:6]=10(OFF)
+        assert 0 not in result  # missing
+        assert result[1] == 0  # OFF
+        assert result[2] == 0  # OFF
+        assert result[3] == 0  # OFF
 
     def test_empty_reply_returns_empty(self) -> None:
         """Too-short data should return empty dict."""
-        assert parse_status_reply(b"\xd8\x38\x00") == {}
+        assert parse_status_reply(b"\xd8\x38\x00") == (0, {})
 
-    def test_unknown_coding_returns_empty(self) -> None:
-        """Unknown coding byte should return empty dict."""
+    def test_unknown_header_returns_empty(self) -> None:
+        """Non-status header should return empty dict."""
         from pycbus.checksum import checksum as cs
 
-        payload = bytes([0xD8, 0x38, 0x00, 0x10, 0xFF])
+        payload = bytes([0x05, 0x38, 0x00, 0x10, 0xFF])
         chk = cs(payload)
         data = payload + bytes([chk])
-        assert parse_status_reply(data) == {}
+        assert parse_status_reply(data) == (0, {})
 
 
 # ===========================================================================

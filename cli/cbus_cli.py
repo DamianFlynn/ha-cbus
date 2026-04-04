@@ -432,12 +432,11 @@ _APP_ID_MAP: dict[str, int] = {
 
 
 def cmd_status(args: argparse.Namespace) -> int:
-    """Query current group levels for an application.
+    """Query current group status for an application.
 
-    Connects to the PCI, sends binary status requests for all 3
-    blocks (covering groups 0-255), and prints the level of every
-    group that has a non-zero value.  Use ``--all`` to include
-    groups at level 0.
+    Connects to the PCI, sends a binary status request covering all
+    256 groups, and prints the state of every group that is ON.
+    Use ``--all`` to include groups that are OFF.
 
     Returns:
         0 on success, 2 on connection error.
