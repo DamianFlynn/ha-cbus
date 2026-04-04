@@ -1,27 +1,30 @@
-"""Tests for pycbus CLI (command-line interface).
+"""Tests for the standalone C-Bus CLI.
 
-The CLI allows testing C-Bus commands without Home Assistant.
-These tests exercise the offline sub-commands (build, checksum)
-that don't require a live C-Bus interface.
+The CLI is a *consumer* of the pycbus library — it sits outside the
+library package and uses the same public API as Home Assistant.
+
+These tests exercise the offline sub-commands (build, checksum) that
+don't require a live C-Bus interface.
 
 Covers:
     - ``build on``  — verify output format and checksum validity.
     - ``build off`` — verify OFF command structure.
     - ``build ramp`` — verify ramp with duration parsing.
     - ``build terminate`` — verify terminate ramp command.
+    - ``build enable-on`` / ``build enable-off`` — enable control.
+    - ``build trigger`` — trigger event.
     - ``checksum`` — compute mode.
     - ``checksum --verify`` — verification mode (valid and invalid).
     - No arguments — prints help without error.
-    - Unknown command — returns non-zero exit code.
 """
 
 from __future__ import annotations
 
-from pycbus.cli import main
+from cli.cbus_cli import main
 
 
 class TestCliBuild:
-    """Tests for the ``build`` sub-command."""
+    """Tests for the ``build`` sub-command (lighting)."""
 
     def test_build_on(self, capsys) -> None:  # type: ignore[no-untyped-def]
         """``build on --group 1`` should exit 0 and show valid checksum."""
@@ -99,6 +102,40 @@ class TestCliBuild:
         assert exit_code == 0
 
 
+class TestCliBuildEnableAndTrigger:
+    """Tests for build sub-command — enable and trigger actions."""
+
+    def test_build_enable_on(self, capsys) -> None:  # type: ignore[no-untyped-def]
+        """``build enable-on --group 10`` should exit 0."""
+        exit_code = main(["build", "enable-on", "--group", "10"])
+        assert exit_code == 0
+        output = capsys.readouterr().out
+        assert "Enable ON" in output
+        assert "valid" in output
+
+    def test_build_enable_off(self, capsys) -> None:  # type: ignore[no-untyped-def]
+        """``build enable-off --group 10`` should exit 0."""
+        exit_code = main(["build", "enable-off", "--group", "10"])
+        assert exit_code == 0
+        output = capsys.readouterr().out
+        assert "Enable OFF" in output
+
+    def test_build_trigger(self, capsys) -> None:  # type: ignore[no-untyped-def]
+        """``build trigger --group 5`` should exit 0."""
+        exit_code = main(["build", "trigger", "--group", "5"])
+        assert exit_code == 0
+        output = capsys.readouterr().out
+        assert "Trigger" in output
+        assert "valid" in output
+
+    def test_build_trigger_with_action_selector(self, capsys) -> None:  # type: ignore[no-untyped-def]
+        """``build trigger --group 5 --action-selector 1`` should exit 0."""
+        exit_code = main(["build", "trigger", "--group", "5", "--action-selector", "1"])
+        assert exit_code == 0
+        output = capsys.readouterr().out
+        assert "action 1" in output
+
+
 class TestCliChecksum:
     """Tests for the ``checksum`` sub-command."""
 
@@ -141,13 +178,3 @@ class TestCliMisc:
         """No arguments should print help and exit 0."""
         exit_code = main([])
         assert exit_code == 0
-
-    def test_send_not_implemented(self, capsys) -> None:  # type: ignore[no-untyped-def]
-        """``send`` should print not-implemented message."""
-        exit_code = main(["send", "--host", "127.0.0.1", "on", "--group", "1"])
-        assert exit_code == 1
-
-    def test_monitor_not_implemented(self, capsys) -> None:  # type: ignore[no-untyped-def]
-        """``monitor`` should print not-implemented message."""
-        exit_code = main(["monitor", "--host", "127.0.0.1"])
-        assert exit_code == 1
