@@ -195,24 +195,28 @@ class TcpTransport:
         """
         if self._reader is None:
             raise CbusConnectionError("Not connected")
-        try:
-            raw = await asyncio.wait_for(
-                self._reader.readuntil(_CR),
-                timeout=self._timeout,
-            )
-        except TimeoutError as exc:
-            raise CbusTimeoutError("Timeout waiting for data from CNI") from exc
-        except (
-            asyncio.IncompleteReadError,
-            ConnectionResetError,
-            BrokenPipeError,
-        ) as exc:
-            await self.disconnect()
-            raise CbusConnectionError(
-                f"Connection lost to {self._host}:{self._port}"
-            ) from exc
-        # Strip the CR delimiter; also strip any trailing LF or whitespace.
-        return raw.rstrip(b"\r\n")
+        while True:
+            try:
+                raw = await asyncio.wait_for(
+                    self._reader.readuntil(_CR),
+                    timeout=self._timeout,
+                )
+            except TimeoutError as exc:
+                raise CbusTimeoutError("Timeout waiting for data from CNI") from exc
+            except (
+                asyncio.IncompleteReadError,
+                ConnectionResetError,
+                BrokenPipeError,
+            ) as exc:
+                await self.disconnect()
+                raise CbusConnectionError(
+                    f"Connection lost to {self._host}:{self._port}"
+                ) from exc
+            # Strip CR/LF; skip empty frames from CRLF line endings.
+            line = raw.strip(b"\r\n")
+            if not line:
+                continue
+            return line
 
     async def write(self, data: bytes) -> None:
         """Write raw bytes to the CNI.
@@ -335,20 +339,27 @@ class SerialTransport:
         """
         if self._reader is None:
             raise CbusConnectionError("Not connected")
-        try:
-            raw = await asyncio.wait_for(
-                self._reader.readuntil(_CR),
-                timeout=self._timeout,
-            )
-        except TimeoutError as exc:
-            raise CbusTimeoutError("Timeout waiting for data from PCI") from exc
-        except (
-            asyncio.IncompleteReadError,
-            ConnectionResetError,
-        ) as exc:
-            await self.disconnect()
-            raise CbusConnectionError(f"Connection lost to {self._url}") from exc
-        return raw.rstrip(b"\r\n")
+        while True:
+            try:
+                raw = await asyncio.wait_for(
+                    self._reader.readuntil(_CR),
+                    timeout=self._timeout,
+                )
+            except TimeoutError as exc:
+                raise CbusTimeoutError("Timeout waiting for data from PCI") from exc
+            except (
+                asyncio.IncompleteReadError,
+                ConnectionResetError,
+            ) as exc:
+                await self.disconnect()
+                raise CbusConnectionError(
+                    f"Connection lost to {self._url}"
+                ) from exc
+            # Strip CR/LF; skip empty frames from CRLF line endings.
+            line = raw.strip(b"\r\n")
+            if not line:
+                continue
+            return line
 
     async def write(self, data: bytes) -> None:
         """Write raw bytes to the PCI serial port.

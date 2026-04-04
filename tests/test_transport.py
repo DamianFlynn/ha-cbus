@@ -165,6 +165,22 @@ class TestTcpTransportReadLine:
         assert line == b"D838"
 
     @pytest.mark.asyncio
+    async def test_read_line_crlf_no_corruption(self) -> None:
+        """CRLF-terminated frames must not corrupt the next read."""
+        t = TcpTransport(host="10.0.0.1")
+        reader = _make_reader([b"D838\r\nNEXT\r"])
+        writer = _make_writer()
+
+        with patch("asyncio.open_connection", return_value=(reader, writer)):
+            await t.connect()
+
+        line = await t.read_line()
+        assert line == b"D838"
+
+        next_line = await t.read_line()
+        assert next_line == b"NEXT"
+
+    @pytest.mark.asyncio
     async def test_read_line_not_connected(self) -> None:
         t = TcpTransport(host="10.0.0.1")
         with pytest.raises(CbusConnectionError, match="Not connected"):

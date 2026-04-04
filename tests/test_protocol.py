@@ -275,7 +275,7 @@ class TestSendCommand:
         await p.connect()
 
         # Stop the read loop so we control responses manually
-        p._stop_read_loop()
+        await p._stop_read_loop()
 
         # Prepare the confirmation
         async def _simulate_confirm() -> None:
@@ -297,7 +297,7 @@ class TestSendCommand:
         p = CbusProtocol(t)
         await p.connect()
 
-        p._stop_read_loop()
+        await p._stop_read_loop()
 
         async def _simulate_reject() -> None:
             await asyncio.sleep(0.01)
