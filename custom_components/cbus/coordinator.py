@@ -113,9 +113,9 @@ class CbusCoordinator(DataUpdateCoordinator[GroupStateDict]):
         super().__init__(
             hass,
             _LOGGER,
+            config_entry=entry,
             name=f"{DOMAIN}_{entry.entry_id}",
         )
-        self._entry = entry
         self._protocol: CbusProtocol | None = None
         self._unsubscribe_events: Any = None
 
@@ -136,15 +136,15 @@ class CbusCoordinator(DataUpdateCoordinator[GroupStateDict]):
         Raises:
             CbusConnectionError: If the connection fails.
         """
-        transport_type: str = self._entry.data.get(CONF_TRANSPORT, "tcp")
+        transport_type: str = self.config_entry.data.get(CONF_TRANSPORT, "tcp")
 
         if transport_type == TRANSPORT_SERIAL:
-            serial_port: str = self._entry.data[CONF_SERIAL_PORT]
+            serial_port: str = self.config_entry.data[CONF_SERIAL_PORT]
             transport = SerialTransport(url=serial_port)
             _LOGGER.info("C-Bus coordinator using serial transport: %s", serial_port)
         else:
-            host: str = self._entry.data.get("host", "")
-            port: int = self._entry.data.get("port", DEFAULT_PORT)
+            host: str = self.config_entry.data.get("host", "")
+            port: int = self.config_entry.data.get("port", DEFAULT_PORT)
             transport = TcpTransport(host=host, port=port)
             _LOGGER.info("C-Bus coordinator using TCP transport: %s:%d", host, port)
 

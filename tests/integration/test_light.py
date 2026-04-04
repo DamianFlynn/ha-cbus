@@ -200,5 +200,8 @@ class TestAsyncSetupEntry:
 
         # Should create 2 lighting entities, not the 0xFF one.
         assert len(added) == 2
-        groups = {e._group for e in added}
-        assert groups == {1, 5}
+        unique_ids = {e.unique_id for e in added}
+        assert unique_ids == {
+            f"cbus_test_entry_123_{ApplicationId.LIGHTING}_1",
+            f"cbus_test_entry_123_{ApplicationId.LIGHTING}_5",
+        }

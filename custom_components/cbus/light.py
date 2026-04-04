@@ -11,8 +11,8 @@ Supported features:
 
 Color modes:
     C-Bus lighting is a single-channel dimmer protocol.  The only
-    supported color mode is ``ColorMode.BRIGHTNESS`` (or ``ONOFF`` for
-    relay-only groups).  RGB and colour temperature are not applicable.
+    supported color mode is ``ColorMode.BRIGHTNESS``.
+    RGB and colour temperature are not applicable.
 
 Entity mapping::
 
