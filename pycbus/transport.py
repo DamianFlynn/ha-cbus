@@ -352,9 +352,7 @@ class SerialTransport:
                 ConnectionResetError,
             ) as exc:
                 await self.disconnect()
-                raise CbusConnectionError(
-                    f"Connection lost to {self._url}"
-                ) from exc
+                raise CbusConnectionError(f"Connection lost to {self._url}") from exc
             # Strip CR/LF; skip empty frames from CRLF line endings.
             line = raw.strip(b"\r\n")
             if not line:
