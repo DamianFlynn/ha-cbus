@@ -70,7 +70,7 @@ class MockTransport:
 def _make_init_responses() -> list[bytes]:
     """Standard PCI init conversation: reset ack + 4 CAL confirmations."""
     return [
-        b"#",   # reset ack (ready prompt)
+        b"#",  # reset ack (ready prompt)
         b"g#",  # CAL App Address 1 = 0xFF confirmed
         b"g#",  # CAL App Address 2 = 0xFF confirmed
         b"g#",  # CAL Options #3 confirmed
@@ -198,10 +198,10 @@ class TestConnect:
         """Init fails on first attempt but succeeds on retry."""
         t = MockTransport(
             [
-                b"#",   # retry 1: reset ack
-                b"!",   # retry 1: CAL rejected -> fail
+                b"#",  # retry 1: reset ack
+                b"!",  # retry 1: CAL rejected -> fail
                 # retry 2: full success
-                b"#",   # reset ack
+                b"#",  # reset ack
                 b"g#",  # CAL App Address 1 confirmed
                 b"g#",  # CAL App Address 2 confirmed
                 b"g#",  # CAL Options #3 confirmed
@@ -218,7 +218,7 @@ class TestConnect:
         """PCI may send '=' instead of '#' after reset."""
         t = MockTransport(
             [
-                b"=",   # alternate reset ack
+                b"=",  # alternate reset ack
                 b"g#",  # CAL App Address 1
                 b"g#",  # CAL App Address 2
                 b"g#",  # CAL Options #3

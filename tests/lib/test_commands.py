@@ -292,23 +292,21 @@ class TestParseSalEvent:
         assert len(event.commands) == 5
         # Verify each ramp command in the scene
         expected = [
-            (0x12, 49, 0),    # group 49 -> off
+            (0x12, 49, 0),  # group 49 -> off
             (0x12, 74, 127),  # group 74 -> 50%
-            (0x12, 52, 51),   # group 52 -> 20%
+            (0x12, 52, 51),  # group 52 -> 20%
             (0x12, 37, 255),  # group 37 -> 100%
-            (0x12, 50, 0),    # group 50 -> off
+            (0x12, 50, 0),  # group 50 -> off
         ]
-        for cmd, (opcode, group, level) in zip(
-            event.commands, expected, strict=True
-        ):
+        for cmd, (opcode, group, level) in zip(event.commands, expected, strict=True):
             assert cmd.opcode == opcode
             assert cmd.group == group
             assert cmd.data == level
 
     def test_too_short_returns_none(self) -> None:
         """Data shorter than minimum (7 bytes) returns None."""
-        assert parse_sal_event(b"\x05\x0D\x38\x00\x79") is None
-        assert parse_sal_event(b"\x05\x0D") is None
+        assert parse_sal_event(b"\x05\x0d\x38\x00\x79") is None
+        assert parse_sal_event(b"\x05\x0d") is None
         assert parse_sal_event(b"") is None
 
     def test_truncated_ramp_yields_partial(self) -> None:

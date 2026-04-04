@@ -458,9 +458,7 @@ class CbusProtocol:
 
         # Step 3: Interface Options #3 — LOCAL_SAL + PUN + EXSTAT = 0x0E
         opt3 = (
-            InterfaceOption3.LOCAL_SAL
-            | InterfaceOption3.PUN
-            | InterfaceOption3.EXSTAT
+            InterfaceOption3.LOCAL_SAL | InterfaceOption3.PUN | InterfaceOption3.EXSTAT
         )
         await self._send_cal_and_confirm(0x42, 0x00, opt3)
 
@@ -484,8 +482,8 @@ class CbusProtocol:
         We cycle through ``hijklmnopqrstuvwxyzg`` (20 codes).
         """
         code = bytes([_CONFIRMATION_CODES[self._next_confirmation_index]])
-        self._next_confirmation_index = (
-            (self._next_confirmation_index + 1) % len(_CONFIRMATION_CODES)
+        self._next_confirmation_index = (self._next_confirmation_index + 1) % len(
+            _CONFIRMATION_CODES
         )
         return code
 
@@ -530,9 +528,7 @@ class CbusProtocol:
                 idx = line.find(conf)
                 after = line[idx + 1 : idx + 2]
                 if after == _NEGATIVE:
-                    raise CbusConnectionError(
-                        f"CAL command rejected: {payload!r}"
-                    )
+                    raise CbusConnectionError(f"CAL command rejected: {payload!r}")
                 # Any other character after conf (., #, or nothing) = success.
                 _LOGGER.debug("CAL command confirmed (code=%s)", conf.decode())
                 return
@@ -543,9 +539,7 @@ class CbusProtocol:
                 return
 
             if _NEGATIVE in line:
-                raise CbusConnectionError(
-                    f"CAL command rejected: {payload!r}"
-                )
+                raise CbusConnectionError(f"CAL command rejected: {payload!r}")
 
         raise CbusTimeoutError("No confirmation for CAL command")
 
