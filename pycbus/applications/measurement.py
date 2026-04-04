@@ -66,7 +66,7 @@ class MeasurementData:
     @property
     def value(self) -> float:
         """Scaled measurement value (``raw_value x 10^multiplier``)."""
-        return self.raw_value * (10.0 ** self.multiplier)
+        return self.raw_value * (10.0**self.multiplier)
 
     @property
     def unit_label(self) -> str:
