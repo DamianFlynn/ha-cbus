@@ -16,9 +16,11 @@ State diagram::
         |  send: ~~~\\r  (three tildes = PCI hard reset)
         v  wait for ready prompt
     INITIALISING
-        |  1. Set Interface Options #3 (LOCAL_SAL + EXSTAT)
-        |  2. Set Interface Options #1 (CONNECT + SRCHK + SMART + MONITOR + IDMON)
-        v  all confirmed with g. responses
+        |  1. Set Application Address 1 = 0xFF (all apps)
+        |  2. Set Application Address 2 = 0xFF (all apps)
+        |  3. Set Interface Options #3 (LOCAL_SAL + PUN + EXSTAT)
+        |  4. Set Interface Options #1 (CONNECT + SRCHK + SMART + MONITOR)
+        v  all confirmed with matching confirmation codes
     READY
         |  - send SAL commands (lighting, trigger, enable ...)
         |  - receive monitor events (level changes, triggers)
@@ -57,7 +59,13 @@ from collections.abc import Callable
 from enum import Enum, auto
 from typing import TYPE_CHECKING
 
-from .checksum import checksum, verify
+from .checksum import verify
+from .commands import (
+    GROUPS_PER_BLOCK,
+    STATUS_BLOCK_COUNT,
+    parse_status_reply,
+    status_request,
+)
 from .constants import (
     ConfirmationCode,
     InterfaceOption1,
@@ -76,24 +84,33 @@ _MAX_RETRIES = 3
 # Seconds to wait for a confirmation after sending a command.
 _CONFIRMATION_TIMEOUT = 5.0
 
-# PCI reset command: three tildes.
-_RESET_CMD = b"~~~\r"
+# Single tilde + CR used by the reset sequence (sent three times).
+_RESET_TILDE = b"~\r"
 
 # Confirmation characters we look for in PCI responses.
 _POSITIVE = bytes([ConfirmationCode.POSITIVE])
 _NEGATIVE = bytes([ConfirmationCode.NEGATIVE])
 _READY = bytes([ConfirmationCode.READY])
 
+# Confirmation codes cycled through when sending commands.
+# Matches the C-Bus protocol spec and micolous/cbus implementation.
+_CONFIRMATION_CODES = b"hijklmnopqrstuvwxyzg"
+
 
 def _build_cal_command(parameter: int, offset: int, value: int) -> bytes:
     """Build a CAL (Configuration Adaptation Layer) write command.
 
-    CAL commands set PCI interface parameters.  The wire format is::
+    CAL commands are Device Management packets.  The first byte (0xA3)
+    is the **flags** byte encoding DAT=POINT_TO_POINT_TO_MULTIPOINT (0x03),
+    dp=True (0x20), priority=CLASS_2 (0x80).  The wire format in basic
+    mode (before SMART is enabled) is::
 
-        @A3 <param_hi> <param_lo> 00 <value> <checksum>
+        A3 <param> <offset> <value> <confirmation_code> \r
 
-    where the ``@`` prefix tells the PCI this is a CAL frame (not SAL).
-    The full frame on the wire is ``\\@A3...\\r``.
+    No ``\\`` prefix and no checksum.  The confirmation code is appended
+    by the caller.
+
+    Reference: *C-Bus Serial Interface User Guide*, §10.2.
 
     Args:
         parameter: The PCI parameter number (e.g. 0x30 for options #1).
@@ -101,12 +118,11 @@ def _build_cal_command(parameter: int, offset: int, value: int) -> bytes:
         value: The byte value to write.
 
     Returns:
-        Hex-encoded payload bytes (without ``\\`` prefix or ``\\r`` suffix)
-        ready to be framed by :meth:`CbusProtocol._send_frame`.
+        Hex-encoded Device Management payload (no checksum, no
+        confirmation code) ready for :meth:`_send_cal_and_confirm`.
     """
     raw = bytes([0xA3, parameter, offset, value])
-    cs = checksum(raw)
-    return b"@" + (raw + bytes([cs])).hex().upper().encode()
+    return raw.hex().upper().encode()
 
 
 class ProtocolState(Enum):
@@ -122,6 +138,10 @@ class ProtocolState(Enum):
 # Type alias for SAL event callbacks.
 # Callbacks receive the raw hex-decoded bytes of the SAL event.
 SalEventCallback = Callable[[bytes], None]
+
+# Type alias for status reply callbacks.
+# Callbacks receive a dict mapping (app_id, group) to level (0-255).
+StatusCallback = Callable[[dict[tuple[int, int], int]], None]
 
 
 class CbusProtocol:
@@ -147,10 +167,18 @@ class CbusProtocol:
         self._max_retries = max_retries
         self._state = ProtocolState.DISCONNECTED
         self._event_callbacks: list[SalEventCallback] = []
+        self._status_callbacks: list[StatusCallback] = []
         self._read_task: asyncio.Task[None] | None = None
         self._command_lock = asyncio.Lock()
         self._confirmation_event = asyncio.Event()
         self._last_confirmation: bytes = b""
+        # Pending status request: accumulates block replies.
+        self._status_pending_app: int | None = None
+        self._status_levels: dict[tuple[int, int], int] = {}
+        self._status_blocks_remaining: int = 0
+        self._status_done = asyncio.Event()
+        # Confirmation code index — cycles through _CONFIRMATION_CODES.
+        self._next_confirmation_index: int = 0
 
     @property
     def state(self) -> ProtocolState:
@@ -177,6 +205,92 @@ class CbusProtocol:
             self._event_callbacks.remove(callback)
 
         return _unsubscribe
+
+    def on_status(self, callback: StatusCallback) -> Callable[[], None]:
+        """Register a callback for status reply data.
+
+        When :meth:`request_status` completes, all registered status
+        callbacks receive a dict of ``{(app_id, group): level}``.
+
+        Args:
+            callback: Called with the full status dict.
+
+        Returns:
+            An unsubscribe function that removes the callback.
+        """
+        self._status_callbacks.append(callback)
+
+        def _unsubscribe() -> None:
+            self._status_callbacks.remove(callback)
+
+        return _unsubscribe
+
+    async def request_status(
+        self,
+        app_id: int,
+        timeout: float = 10.0,
+    ) -> dict[tuple[int, int], int]:
+        """Request the current level of all groups for an application.
+
+        Sends binary status requests for all 3 blocks (covering groups
+        0-255) and collects the replies.  The results are also dispatched
+        to any registered :meth:`on_status` callbacks.
+
+        Args:
+            app_id: Application ID to query
+                    (e.g. ``ApplicationId.LIGHTING``).
+            timeout: Maximum seconds to wait for all 3 block replies.
+
+        Returns:
+            Dict mapping ``(app_id, group_address)`` to level (0-255).
+
+        Raises:
+            CbusConnectionError: If not in READY state.
+            CbusTimeoutError: If the PCI does not reply in time.
+        """
+        if self._state != ProtocolState.READY:
+            raise CbusConnectionError(
+                f"Cannot request status: protocol is {self._state.name}"
+            )
+
+        async with self._command_lock:
+            # Set up accumulator for status replies.
+            self._status_pending_app = app_id
+            self._status_levels = {}
+            self._status_blocks_remaining = STATUS_BLOCK_COUNT
+            self._status_done.clear()
+
+            # Send all 3 block requests.
+            for block in range(STATUS_BLOCK_COUNT):
+                cmd = status_request(app_id, block)
+                hex_payload = cmd.hex().upper().encode()
+                await self._send_frame(hex_payload)
+                _LOGGER.debug("Sent status request: app=0x%02X block=%d", app_id, block)
+
+            # Wait for replies (read loop will call _handle_status_reply).
+            try:
+                await asyncio.wait_for(self._status_done.wait(), timeout=timeout)
+            except TimeoutError as exc:
+                _LOGGER.warning(
+                    "Status request timed out for app 0x%02X (%d blocks still pending)",
+                    app_id,
+                    self._status_blocks_remaining,
+                )
+                raise CbusTimeoutError(
+                    f"Status request timed out for app 0x{app_id:02X}"
+                ) from exc
+            finally:
+                result = dict(self._status_levels)
+                self._status_pending_app = None
+
+        # Dispatch to status callbacks.
+        for callback in tuple(self._status_callbacks):
+            try:
+                callback(result)
+            except Exception:
+                _LOGGER.exception("Error in status callback")
+
+        return result
 
     async def connect(self) -> None:
         """Connect to the PCI/CNI, reset, and run the init sequence.
@@ -278,67 +392,160 @@ class CbusProtocol:
     # ------------------------------------------------------------------
 
     async def _reset(self) -> None:
-        """Send reset (~~~) and drain until we see a ready prompt."""
-        self._state = ProtocolState.RESETTING
-        _LOGGER.debug("Sending PCI reset")
-        await self._transport.write(_RESET_CMD)
+        """Send PCI reset and drain lines until the bus is quiet.
 
-        # Drain lines until we see one that ends with or contains
-        # a ready prompt (#) or the PCI's power-on '=' sign.
+        Sends ``~\r`` three times (three separate reset packets), matching
+        the reference implementation (micolous/cbus).  The Serial Interface
+        Guide requires "three or more tildes" to reset the PCI.
+
+        After the resets, drain any output.  The PCI *may* send a ready
+        prompt (``#``) or a power-on ``=`` sign, but not all firmware
+        versions do.  We drain until a read timeout, which indicates
+        the PCI has finished its reset output.
+        """
+        self._state = ProtocolState.RESETTING
+        _LOGGER.debug("Sending PCI reset (3 x tilde)")
+        for _ in range(3):
+            await self._transport.write(_RESET_TILDE)
+
+        # Drain lines — look for a ready prompt but don't require it.
         for _ in range(20):  # safety limit
-            line = await self._transport.read_line()
+            try:
+                line = await self._transport.read_line()
+            except CbusTimeoutError:
+                # No more data — PCI has finished its reset output.
+                _LOGGER.debug("Reset drain complete (timeout)")
+                return
             _LOGGER.debug("RESET RX: %r", line)
             if _READY in line or b"=" in line:
                 _LOGGER.debug("PCI reset acknowledged")
                 return
 
-        raise CbusTimeoutError("PCI did not acknowledge reset")
+        _LOGGER.debug("Reset drain complete (line limit)")
 
     async def _initialise(self) -> None:
-        """Run the PCI init sequence: set interface options."""
+        """Run the PCI init sequence: set application address and options.
+
+        All three CAL commands are sent in **basic mode** (no ``\\``
+        prefix, no checksum) because SMART/SRCHK are not yet enabled.
+        The PCI echoes each command in basic mode; we look for the
+        ``g`` confirmation that follows the echo.
+
+        Steps (from *C-Bus Serial Interface User Guide* §10.2)::
+
+            1. Set Application Address 1 = 0xFF (all applications)
+            2. Set Application Address 2 = 0xFF (all applications)
+            3. Interface Options #3: LOCAL_SAL + PUN + EXSTAT  (0x0E)
+            4. Interface Options #1: CONNECT + SRCHK + SMART + MONITOR  (0x59)
+
+        Setting both application addresses to 0xFF matches the production
+        PCI configuration (HOME.xml: ``Application = "0xff 0xff"``),
+        ensuring we receive SAL traffic for **all** applications — lighting,
+        triggers, enable, and any future apps.
+        """
         self._state = ProtocolState.INITIALISING
         _LOGGER.debug("Running PCI init sequence")
 
-        # Step 1: Interface Options #3 — LOCAL_SAL + EXSTAT = 0x0A
-        opt3 = InterfaceOption3.LOCAL_SAL | InterfaceOption3.EXSTAT
+        # Step 1: Application Address 1 = 0xFF (all applications).
+        # Tells the PCI to report traffic for every application, not just
+        # a single one.  Matches HOME.xml production config.
+        await self._send_cal_and_confirm(0x21, 0x00, 0xFF)
+
+        # Step 2: Application Address 2 = 0xFF (all applications).
+        # The PCI has two application address slots.  Both set to 0xFF
+        # ensures no filtering of any application traffic.
+        await self._send_cal_and_confirm(0x22, 0x00, 0xFF)
+
+        # Step 3: Interface Options #3 — LOCAL_SAL + PUN + EXSTAT = 0x0E
+        opt3 = (
+            InterfaceOption3.LOCAL_SAL
+            | InterfaceOption3.PUN
+            | InterfaceOption3.EXSTAT
+        )
         await self._send_cal_and_confirm(0x42, 0x00, opt3)
 
-        # Step 2: Interface Options #1 — CONNECT+SRCHK+SMART+MONITOR+IDMON = 0x79
+        # Step 3: Interface Options #1 — CONNECT + SRCHK + SMART + MONITOR = 0x59
+        # Note: this is the LAST init command because it enables SMART mode,
+        # which changes the framing rules for all subsequent commands.
         opt1 = (
             InterfaceOption1.CONNECT
             | InterfaceOption1.SRCHK
             | InterfaceOption1.SMART
             | InterfaceOption1.MONITOR
-            | InterfaceOption1.IDMON
         )
         await self._send_cal_and_confirm(0x30, 0x00, opt1)
 
         _LOGGER.debug("PCI init sequence complete")
 
+    def _get_confirmation_code(self) -> bytes:
+        """Return the next confirmation code and advance the index.
+
+        The PCI uses the confirmation code to match responses to requests.
+        We cycle through ``hijklmnopqrstuvwxyzg`` (20 codes).
+        """
+        code = bytes([_CONFIRMATION_CODES[self._next_confirmation_index]])
+        self._next_confirmation_index = (
+            (self._next_confirmation_index + 1) % len(_CONFIRMATION_CODES)
+        )
+        return code
+
     async def _send_cal_and_confirm(
         self, parameter: int, offset: int, value: int
     ) -> None:
-        """Send a CAL command and wait for positive confirmation.
+        """Send a CAL command in basic mode and wait for confirmation.
+
+        Basic mode means no ``\\`` prefix and no checksum — the PCI is
+        still in default mode when these are sent (SMART/SRCHK not yet
+        active).  A confirmation code is appended so the PCI can match
+        the response.
+
+        The PCI responds with the **same confirmation code** we sent,
+        followed by ``.`` (success/ready) or ``!`` (error).  For example,
+        if we send ``A3210038h\\r``, the PCI replies ``h.`` on success.
 
         Raises:
             CbusConnectionError: On negative response.
             CbusTimeoutError: On timeout.
         """
         cmd = _build_cal_command(parameter, offset, value)
-        _LOGGER.debug("INIT TX: %s", cmd.decode())
+        conf = self._get_confirmation_code()
+        payload = cmd + conf  # e.g. b"A3210038" + b"h"
+        _LOGGER.debug("INIT TX (basic): %s", payload.decode())
 
-        await self._send_frame(cmd)
+        await self._send_basic_frame(payload)
 
-        # Read lines looking for confirmation.
+        # Read lines looking for our confirmation code.
+        # The PCI echoes the command, then responds with <conf><result>.
+        # result is '.' or '#' for success, '!' for error.
         for _ in range(10):  # safety limit
-            line = await self._transport.read_line()
+            try:
+                line = await self._transport.read_line()
+            except CbusTimeoutError:
+                break
             _LOGGER.debug("INIT RX: %r", line)
 
-            if _POSITIVE in line:
-                _LOGGER.debug("CAL command confirmed")
+            # Look for our confirmation code in the response.
+            if conf in line:
+                # Check if the character following conf is success or error.
+                idx = line.find(conf)
+                after = line[idx + 1 : idx + 2]
+                if after == _NEGATIVE:
+                    raise CbusConnectionError(
+                        f"CAL command rejected: {payload!r}"
+                    )
+                # Any other character after conf (., #, or nothing) = success.
+                _LOGGER.debug("CAL command confirmed (code=%s)", conf.decode())
                 return
+
+            # Also accept bare 'g' (older PCI firmware without conf codes).
+            if _POSITIVE in line:
+                _LOGGER.debug("CAL command confirmed (legacy g)")
+                return
+
             if _NEGATIVE in line:
-                raise CbusConnectionError(f"CAL command rejected: {cmd!r}")
+                raise CbusConnectionError(
+                    f"CAL command rejected: {payload!r}"
+                )
 
         raise CbusTimeoutError("No confirmation for CAL command")
 
@@ -346,10 +553,21 @@ class CbusProtocol:
     # Internal: framing
     # ------------------------------------------------------------------
 
+    async def _send_basic_frame(self, payload: bytes) -> None:
+        """Send a command in basic (non-SMART) mode.
+
+        No ``\\`` prefix, no checksum — just the payload followed by CR.
+        Used during init before SMART mode is enabled.
+        """
+        frame = payload + b"\r"
+        _LOGGER.debug("TX basic: %r", frame)
+        await self._transport.write(frame)
+
     async def _send_frame(self, payload: bytes) -> None:
-        """Frame and send a command to the PCI.
+        """Frame and send a command to the PCI in SMART mode.
 
         Adds ``\\`` prefix and ``\\r`` suffix to the payload.
+        Used after init when SMART + SRCHK are active.
         """
         frame = b"\\" + payload + b"\r"
         _LOGGER.debug("TX frame: %r", frame)
@@ -430,6 +648,12 @@ class CbusProtocol:
     def _dispatch_event(self, line: bytes) -> None:
         """Attempt to decode a hex line as an SAL event and dispatch.
 
+        Lines are classified as either:
+        - **Status replies** (header byte & 0xF8 == 0xD8) → routed to
+          :meth:`_handle_status_reply`.
+        - **SAL monitor events** (everything else) → dispatched to
+          registered event callbacks.
+
         Args:
             line: Raw ASCII hex bytes from the PCI.
         """
@@ -445,9 +669,64 @@ class CbusProtocol:
             _LOGGER.debug("Checksum mismatch, ignoring: %s", decoded.hex())
             return
 
+        # Status replies have a PM reply header: top 5 bits = 11011 (0xD8).
+        # Specifically 0xD8-0xDF depending on the source address field.
+        if len(decoded) >= 4 and (decoded[0] & 0xF8) == 0xD8:
+            self._handle_status_reply(decoded)
+            return
+
         _LOGGER.debug("SAL event: %s", decoded.hex())
         for callback in tuple(self._event_callbacks):
             try:
                 callback(decoded)
             except Exception:
                 _LOGGER.exception("Error in SAL event callback")
+
+    def _handle_status_reply(self, decoded: bytes) -> None:
+        """Handle a binary status reply from the PCI.
+
+        Parses the reply using :func:`parse_status_reply` and either
+        accumulates it into the pending status request or dispatches
+        it immediately (for unsolicited status updates from MONITOR mode).
+
+        Args:
+            decoded: Raw decoded bytes of the status reply
+                     (checksum already verified).
+        """
+        app_id = decoded[1] if len(decoded) > 1 else 0
+        levels = parse_status_reply(decoded)
+
+        if not levels:
+            _LOGGER.debug("Empty or unparseable status reply: %s", decoded.hex())
+            return
+
+        _LOGGER.debug(
+            "Status reply: app=0x%02X, %d groups, first_levels=%s",
+            app_id,
+            len(levels),
+            dict(list(levels.items())[:5]),
+        )
+
+        if self._status_pending_app is not None and self._status_pending_app == app_id:
+            # This is a reply to our status request.
+            # Calculate the block offset from the position in the sequence.
+            block = STATUS_BLOCK_COUNT - self._status_blocks_remaining
+            base_group = block * GROUPS_PER_BLOCK
+            for offset, level in levels.items():
+                group = base_group + offset
+                if group < 256:
+                    self._status_levels[(app_id, group)] = level
+
+            self._status_blocks_remaining -= 1
+            if self._status_blocks_remaining <= 0:
+                self._status_done.set()
+        else:
+            # Unsolicited status update — dispatch to status callbacks.
+            result: dict[tuple[int, int], int] = {}
+            for offset, level in levels.items():
+                result[(app_id, offset)] = level
+            for callback in tuple(self._status_callbacks):
+                try:
+                    callback(result)
+                except Exception:
+                    _LOGGER.exception("Error in status callback")
