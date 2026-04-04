@@ -555,7 +555,7 @@ class CbusProtocol:
             1. Set Application Address 1 = 0xFF (all applications)
             2. Set Application Address 2 = 0xFF (all applications)
             3. Interface Options #3: LOCAL_SAL + PUN + EXSTAT  (0x0E)
-            4. Interface Options #1: CONNECT + SRCHK + SMART + MONITOR  (0x59)
+            4. Interface Options #1: CONNECT+SRCHK+SMART+MONITOR+IDMON (0x79)
 
         Setting both application addresses to 0xFF matches the production
         PCI configuration (HOME.xml: ``Application = "0xff 0xff"``),
@@ -581,14 +581,17 @@ class CbusProtocol:
         )
         await self._send_cal_and_confirm(0x42, 0x00, opt3)
 
-        # Step 3: Interface Options #1 — CONNECT + SRCHK + SMART + MONITOR = 0x59
+        # Step 4: Interface Options #1 — CONNECT+SRCHK+SMART+MONITOR+IDMON = 0x79
         # Note: this is the LAST init command because it enables SMART mode,
         # which changes the framing rules for all subsequent commands.
+        # IDMON ensures all CAL replies use long-form (consistent with SMART).
+        # MONITOR relays Status Reports for applications matching $21/$22.
         opt1 = (
             InterfaceOption1.CONNECT
             | InterfaceOption1.SRCHK
             | InterfaceOption1.SMART
             | InterfaceOption1.MONITOR
+            | InterfaceOption1.IDMON
         )
         await self._send_cal_and_confirm(0x30, 0x00, opt1)
 

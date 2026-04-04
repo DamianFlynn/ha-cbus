@@ -462,7 +462,7 @@ def cmd_status(args: argparse.Namespace) -> int:
             return 0
 
         # Sort by group address.
-        sorted_levels = sorted(levels.items(), key=lambda x: x[1])
+        sorted_levels = sorted(levels.items(), key=lambda x: x[0])
         printed = 0
         for (_, group), level in sorted_levels:
             if level > 0 or show_all:

@@ -93,10 +93,10 @@ class TestBuildCalCommand:
         assert raw == bytes([0xA3, 0x42, 0x00, 0x0E])
 
     def test_cal_options1(self) -> None:
-        """CAL for Interface Options #1: param=0x30, offset=0x00, value=0x59."""
-        cmd = _build_cal_command(0x30, 0x00, 0x59)
+        """CAL for Interface Options #1: param=0x30, offset=0x00, value=0x79."""
+        cmd = _build_cal_command(0x30, 0x00, 0x79)
         raw = bytes.fromhex(cmd.decode())
-        assert raw == bytes([0xA3, 0x30, 0x00, 0x59])
+        assert raw == bytes([0xA3, 0x30, 0x00, 0x79])
 
     def test_cal_app_address(self) -> None:
         """CAL for Application Address 1: param=0x21, offset=0x00, value=0x38."""

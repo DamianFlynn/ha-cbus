@@ -263,7 +263,7 @@ def cmd_send(args: argparse.Namespace) -> int:
     from .transport import TcpTransport
 
     group = args.group
-    network = getattr(args, "network", 0)
+    network = args.network
 
     if args.action == "on":
         cmd = lighting_on(group=group, network=network)
@@ -528,6 +528,13 @@ def build_parser() -> argparse.ArgumentParser:
     send_parser.add_argument("--group", "-g", type=int, required=True)
     send_parser.add_argument("--level", "-l", type=int, default=255)
     send_parser.add_argument("--rate", "-r", type=str, default=None)
+    send_parser.add_argument(
+        "--network",
+        "-n",
+        type=int,
+        default=0,
+        help="C-Bus network number (default: 0).",
+    )
 
     # --- monitor sub-command ---
     mon_parser = sub.add_parser(

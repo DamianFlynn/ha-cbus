@@ -317,23 +317,24 @@ class InterfaceOption1(IntEnum):
     """Bitmask values for Interface Options #1 (parameter 0x30).
 
     Written via ``@A3300xx`` where ``xx`` is the hex-encoded option byte.
-    Our init sequence sets: CONNECT | SRCHK | SMART | MONITOR = 0x59.
+    Our init sequence sets:
+    CONNECT | SRCHK | SMART | MONITOR | IDMON = 0x79.
 
     Flags:
         CONNECT  — maintain a connection to the C-Bus network.
         SRCHK    — enable source-address checking on replies.
         SMART    — enable "smart mode" (structured replies, not raw echo).
-        MONITOR  — receive all SAL traffic on the network as monitor events.
-        IDMON    — include source unit address in monitor packets.
+        MONITOR  — relay all Status Reports for matched applications (bit 5).
+        IDMON    — long-form CAL replies for self-initiated commands (bit 6).
 
-    Reference: *C-Bus Serial Interface User Guide*, §7.2 Table 7-1.
+    Reference: *C-Bus Serial Interface User Guide*, §10, Table p58.
     """
 
     CONNECT = 0x01
     SRCHK = 0x08
     SMART = 0x10
-    MONITOR = 0x40
-    IDMON = 0x20
+    MONITOR = 0x20
+    IDMON = 0x40
 
 
 class InterfaceOption3(IntEnum):
