@@ -42,9 +42,15 @@ from pycbus.constants import (
 )
 from pycbus.exceptions import CbusConnectionError
 from pycbus.protocol import CbusProtocol
-from pycbus.transport import TcpTransport
+from pycbus.transport import SerialTransport, TcpTransport
 
-from .const import DEFAULT_PORT, DOMAIN
+from .const import (
+    CONF_SERIAL_PORT,
+    CONF_TRANSPORT,
+    DEFAULT_PORT,
+    DOMAIN,
+    TRANSPORT_SERIAL,
+)
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
@@ -130,10 +136,18 @@ class CbusCoordinator(DataUpdateCoordinator[GroupStateDict]):
         Raises:
             CbusConnectionError: If the connection fails.
         """
-        host: str = self._entry.data.get("host", "")
-        port: int = self._entry.data.get("port", DEFAULT_PORT)
+        transport_type: str = self._entry.data.get(CONF_TRANSPORT, "tcp")
 
-        transport = TcpTransport(host=host, port=port)
+        if transport_type == TRANSPORT_SERIAL:
+            serial_port: str = self._entry.data[CONF_SERIAL_PORT]
+            transport = SerialTransport(url=serial_port)
+            _LOGGER.info("C-Bus coordinator using serial transport: %s", serial_port)
+        else:
+            host: str = self._entry.data.get("host", "")
+            port: int = self._entry.data.get("port", DEFAULT_PORT)
+            transport = TcpTransport(host=host, port=port)
+            _LOGGER.info("C-Bus coordinator using TCP transport: %s:%d", host, port)
+
         self._protocol = CbusProtocol(transport)
 
         await self._protocol.connect()
@@ -141,7 +155,7 @@ class CbusCoordinator(DataUpdateCoordinator[GroupStateDict]):
         # Register for SAL monitor events.
         self._unsubscribe_events = self._protocol.on_event(self._handle_sal_event)
 
-        _LOGGER.info("C-Bus coordinator connected to %s:%d", host, port)
+        _LOGGER.info("C-Bus coordinator connected")
 
     async def async_shutdown(self) -> None:
         """Disconnect from the PCI/CNI and clean up.
@@ -174,8 +188,8 @@ class CbusCoordinator(DataUpdateCoordinator[GroupStateDict]):
             network: C-Bus network number (default 0).
         """
         cmd = lighting_on(group=group, network=network)
-        await self._send(cmd)
-        self._update_level(ApplicationId.LIGHTING, group, 0xFF)
+        if await self._send(cmd):
+            self._update_level(ApplicationId.LIGHTING, group, 0xFF)
 
     async def async_light_off(self, group: int, network: int = 0) -> None:
         """Turn a lighting group off.
@@ -185,8 +199,8 @@ class CbusCoordinator(DataUpdateCoordinator[GroupStateDict]):
             network: C-Bus network number (default 0).
         """
         cmd = lighting_off(group=group, network=network)
-        await self._send(cmd)
-        self._update_level(ApplicationId.LIGHTING, group, 0x00)
+        if await self._send(cmd):
+            self._update_level(ApplicationId.LIGHTING, group, 0x00)
 
     async def async_light_ramp(
         self,
@@ -205,8 +219,8 @@ class CbusCoordinator(DataUpdateCoordinator[GroupStateDict]):
         """
         rate = _closest_ramp_rate(transition)
         cmd = lighting_ramp(group=group, level=level, rate=rate, network=network)
-        await self._send(cmd)
-        self._update_level(ApplicationId.LIGHTING, group, level)
+        if await self._send(cmd):
+            self._update_level(ApplicationId.LIGHTING, group, level)
 
     async def async_light_terminate_ramp(self, group: int, network: int = 0) -> None:
         """Stop a running ramp on a lighting group.
@@ -222,11 +236,14 @@ class CbusCoordinator(DataUpdateCoordinator[GroupStateDict]):
     # Internal helpers
     # ------------------------------------------------------------------
 
-    async def _send(self, cmd_bytes: bytes) -> None:
+    async def _send(self, cmd_bytes: bytes) -> bool:
         """Hex-encode and send a command via the protocol.
 
         Args:
             cmd_bytes: Raw SAL command bytes (from pycbus.commands).
+
+        Returns:
+            ``True`` if the PCI confirmed the command, ``False`` otherwise.
 
         Raises:
             CbusConnectionError: If not connected.
@@ -235,7 +252,10 @@ class CbusCoordinator(DataUpdateCoordinator[GroupStateDict]):
             raise CbusConnectionError("Coordinator not connected")
 
         hex_payload = cmd_bytes.hex().upper().encode()
-        await self._protocol.send_command(hex_payload)
+        confirmed = await self._protocol.send_command(hex_payload)
+        if not confirmed:
+            _LOGGER.warning("PCI rejected command: %s", hex_payload.decode())
+        return confirmed
 
     def _update_level(self, app_id: int, group: int, level: int) -> None:
         """Update the state cache and notify entities."""

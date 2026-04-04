@@ -230,8 +230,8 @@ class CbusProtocol:
         Stops the background read loop and closes the transport.
         """
         _LOGGER.info("Disconnecting from C-Bus interface")
-        await self._stop_read_loop()
         self._state = ProtocolState.DISCONNECTED
+        await self._stop_read_loop()
         await self._transport.disconnect()
 
     async def send_command(self, payload_hex: bytes) -> bool:

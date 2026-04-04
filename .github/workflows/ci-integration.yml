@@ -14,14 +14,16 @@ on:
     branches: [main]
     paths:
       - "custom_components/**"
-      - "tests/test_config_flow.py"
+      - "pycbus/**"
+      - "tests/integration/**"
       - "tests/conftest.py"
       - ".github/workflows/ci-integration.yml"
   pull_request:
     branches: [main]
     paths:
       - "custom_components/**"
-      - "tests/test_config_flow.py"
+      - "pycbus/**"
+      - "tests/integration/**"
       - "tests/conftest.py"
       - ".github/workflows/ci-integration.yml"
 
@@ -88,4 +90,4 @@ jobs:
 
       - name: Run integration tests
         run: |
-          python -m pytest tests/test_config_flow.py -v --tb=short
+          python -m pytest tests/integration/ -v --tb=short
