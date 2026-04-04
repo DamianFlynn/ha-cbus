@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from homeassistant.const import Platform
+
 DOMAIN = "cbus"
 
-PLATFORMS: list[str] = []  # Populated as entity platforms are implemented.
+PLATFORMS: list[Platform] = [Platform.LIGHT]
 
 CONF_TRANSPORT = "transport"
 CONF_SERIAL_PORT = "serial_port"
