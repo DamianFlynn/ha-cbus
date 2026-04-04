@@ -51,6 +51,7 @@ Usage::
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import Callable
 from enum import Enum, auto
@@ -194,7 +195,12 @@ class CbusProtocol:
 
         self._state = ProtocolState.CONNECTING
         _LOGGER.info("Connecting to C-Bus interface...")
-        await self._transport.connect()
+        try:
+            await self._transport.connect()
+        except Exception:
+            self._state = ProtocolState.DISCONNECTED
+            _LOGGER.exception("Failed to connect to C-Bus interface")
+            raise
 
         for attempt in range(1, self._max_retries + 1):
             try:
@@ -224,8 +230,8 @@ class CbusProtocol:
         Stops the background read loop and closes the transport.
         """
         _LOGGER.info("Disconnecting from C-Bus interface")
-        self._stop_read_loop()
         self._state = ProtocolState.DISCONNECTED
+        await self._stop_read_loop()
         await self._transport.disconnect()
 
     async def send_command(self, payload_hex: bytes) -> bool:
@@ -359,10 +365,12 @@ class CbusProtocol:
             return
         self._read_task = asyncio.create_task(self._read_loop(), name="cbus-read-loop")
 
-    def _stop_read_loop(self) -> None:
-        """Cancel the background read task."""
+    async def _stop_read_loop(self) -> None:
+        """Cancel the background read task and await its completion."""
         if self._read_task is not None:
             self._read_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._read_task
             self._read_task = None
 
     async def _read_loop(self) -> None:
@@ -378,7 +386,11 @@ class CbusProtocol:
             while self._state == ProtocolState.READY:
                 try:
                     line = await self._transport.read_line()
-                except (CbusConnectionError, CbusTimeoutError):
+                except CbusTimeoutError:
+                    _LOGGER.debug("Read timeout in read loop; continuing")
+                    await asyncio.sleep(0)
+                    continue
+                except CbusConnectionError:
                     _LOGGER.warning("Transport error in read loop")
                     break
 
@@ -430,11 +442,11 @@ class CbusProtocol:
 
         # With SRCHK enabled, the last byte is a checksum.
         if len(decoded) > 1 and not verify(decoded):
-            _LOGGER.debug("Checksum mismatch, ignoring: %s", line.hex())
+            _LOGGER.debug("Checksum mismatch, ignoring: %s", decoded.hex())
             return
 
         _LOGGER.debug("SAL event: %s", decoded.hex())
-        for callback in self._event_callbacks:
+        for callback in tuple(self._event_callbacks):
             try:
                 callback(decoded)
             except Exception:

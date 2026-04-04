@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING
 from homeassistant.config_entries import ConfigEntry
 
 from .const import DOMAIN, PLATFORMS
+from .coordinator import CbusCoordinator
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -40,10 +41,19 @@ type CbusConfigEntry = ConfigEntry
 
 async def async_setup_entry(hass: HomeAssistant, entry: CbusConfigEntry) -> bool:
     """Set up C-Bus from a config entry."""
-    hass.data.setdefault(DOMAIN, {})
-    hass.data[DOMAIN][entry.entry_id] = entry.data
+    coordinator = CbusCoordinator(hass, entry)
+    await coordinator.async_setup()
 
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN][entry.entry_id] = coordinator
+
+    try:
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    except Exception:
+        hass.data[DOMAIN].pop(entry.entry_id, None)
+        await coordinator.async_shutdown()
+        raise
+
     return True
 
 
@@ -51,5 +61,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: CbusConfigEntry) -> boo
     """Unload a C-Bus config entry."""
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
-        hass.data[DOMAIN].pop(entry.entry_id)
+        coordinator: CbusCoordinator = hass.data[DOMAIN].pop(entry.entry_id)
+        await coordinator.async_shutdown()
     return unload_ok

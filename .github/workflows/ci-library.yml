@@ -14,14 +14,16 @@ on:
     branches: [main]
     paths:
       - "pycbus/**"
-      - "tests/**"
+      - "tests/lib/**"
+      - "tests/conftest.py"
       - "pyproject.toml"
       - ".github/workflows/ci-library.yml"
   pull_request:
     branches: [main]
     paths:
       - "pycbus/**"
-      - "tests/**"
+      - "tests/lib/**"
+      - "tests/conftest.py"
       - "pyproject.toml"
       - ".github/workflows/ci-library.yml"
 
@@ -46,10 +48,10 @@ jobs:
           pip install ruff mypy pyserial-asyncio
 
       - name: Ruff check (lint)
-        run: ruff check pycbus/ tests/
+        run: ruff check pycbus/ tests/lib/
 
       - name: Ruff format (style)
-        run: ruff format --check pycbus/ tests/
+        run: ruff format --check pycbus/ tests/lib/
 
       - name: Mypy (strict type checking)
         run: mypy pycbus/
@@ -77,7 +79,7 @@ jobs:
 
       - name: Run tests with coverage
         run: |
-          python -m pytest tests/ \
+          python -m pytest tests/lib/ \
             --cov=pycbus \
             --cov-report=term-missing \
             --cov-report=xml:coverage.xml \

@@ -48,7 +48,7 @@ Issues = "https://github.com/DamianFlynn/ha-cbus/issues"
 include = ["pycbus*"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests/lib", "tests/integration"]
 asyncio_mode = "auto"
 
 [tool.mypy]
