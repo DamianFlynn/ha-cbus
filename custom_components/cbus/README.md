@@ -18,6 +18,27 @@ automation networks. Communicates directly with PCI (serial) or CNI
 | **Domain** | `cbus` |
 | **IoT class** | `local_push` |
 
+## How it connects — direct to hardware, no C-Gate
+
+This integration talks **directly** to C-Bus PCI/CNI hardware using
+the native serial protocol. The Clipsal C-Gate middleware is not used
+and does not need to be installed.
+
+| Connection | Hardware | How |
+|---|---|---|
+| **TCP** | CNI (5500CN) | Connect to the CNI's built-in Ethernet port |
+| **TCP via ser2sock** | PCI (5500PC) | PCI serial → USB → [ser2sock](https://github.com/nutechsoftware/ser2sock) container exposes TCP on port 10001 |
+| **Serial** | PCI (5500PC) | Direct RS-232 or USB-serial adapter |
+
+The most common setup is a **PCI + ser2sock** container: the PCI is
+attached via USB and `ser2sock` bridges the serial port to a TCP
+socket. The integration connects to that socket the same way it
+would connect to a native CNI.
+
+```
+C-Bus PCI ──USB──▶ ser2sock container ◀──TCP :10001── HA (this integration)
+```
+
 ## Prerequisites
 
 This integration depends on the `pycbus` library:

@@ -16,6 +16,20 @@ This CLI is a development and debugging tool. It is not packaged or
 distributed separately — it lives alongside the library and integration
 in the monorepo.
 
+## Connection
+
+The CLI connects **directly** to C-Bus hardware — no C-Gate middleware
+required. The most common setup is a PCI connected via USB with a
+[ser2sock](https://github.com/nutechsoftware/ser2sock) container
+exposing TCP on port 10001:
+
+```
+C-Bus PCI ──USB──▶ ser2sock ◀──TCP :10001── python -m cli
+```
+
+A native CNI (5500CN) works the same way — just point `--host` at its
+IP address.
+
 ## Usage
 
 ```bash

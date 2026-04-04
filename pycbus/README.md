@@ -23,6 +23,33 @@ middleware required.
 > declares `"requirements": ["pycbus==0.1.0"]`. Home Assistant resolves
 > this at runtime via pip.
 
+## Connectivity — direct to hardware, no C-Gate
+
+Unlike the existing `cgate-mqtt` bridge (and many other C-Bus
+integrations), pycbus talks **directly** to the PCI or CNI interface
+using the native C-Bus serial protocol. The Clipsal C-Gate middleware
+is not used and does not need to be installed.
+
+### Connection methods
+
+| Method | Interface | Transport | Typical setup |
+|---|---|---|---|
+| **TCP** | CNI (5500CN) | `TcpTransport` — async socket to port 10001 | CNI has a built-in Ethernet port |
+| **TCP via ser2sock** | PCI (5500PC) | `TcpTransport` — async socket to port 10001 | PCI serial → USB → [ser2sock](https://github.com/nutechsoftware/ser2sock) container exposes TCP |
+| **Serial** | PCI (5500PC) | `SerialTransport` — async 9600 8N1 | PCI connected directly via RS-232 / USB-serial adapter |
+
+The most common deployment uses a **PCI + ser2sock**: the PCI is
+connected via USB to a machine running a `ser2sock` Docker container
+that bridges the serial port to a TCP socket. pycbus then connects to
+that socket exactly as it would to a native CNI.
+
+```
+┌──────────┐ RS-232/USB  ┌──────────┐  TCP :10001  ┌──────────┐
+│  C-Bus   │────────────▶│ ser2sock │◀────────────│  pycbus  │
+│  PCI     │             │ container│              │  library │
+└──────────┘             └──────────┘              └──────────┘
+```
+
 ## Architecture
 
 ```
