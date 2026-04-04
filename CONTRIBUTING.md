@@ -117,29 +117,38 @@ python -m pytest tests/ -v
 python -m pytest tests/ --cov=pycbus --cov-report=term-missing
 
 # Run only library tests (no HA dependency)
-python -m pytest tests/ -v --ignore=tests/test_config_flow.py
+python -m pytest tests/lib/ -v
+
+# Run only CLI tests
+python -m pytest tests/cli/ -v
 
 # Run only integration tests (requires pytest-homeassistant-custom-component)
-python -m pytest tests/test_config_flow.py -v
+python -m pytest tests/integration/ -v
 ```
 
 ### 5. Use the CLI
 
-The `pycbus` CLI works without any hardware connection for the `build`
-and `checksum` sub-commands:
+The standalone CLI (`python -m cli`) can control a live C-Bus network:
+
+```bash
+# Turn on a light
+python -m cli light on --host 192.168.1.50 --group 1
+
+# Monitor all traffic
+python -m cli monitor --host 192.168.1.50
+
+# Query group status
+python -m cli status --host 192.168.1.50
+```
+
+The pycbus package CLI works without hardware for offline building:
 
 ```bash
 # Build a Lighting ON frame
-pycbus build on --group 1
-
-# Build a ramp command
-pycbus build ramp --group 5 --level 128 --rate 4s
+python -c "from pycbus.cli import main; main(['build', 'on', '--group', '1'])"
 
 # Compute a checksum
-pycbus checksum 05 38 00 79 01 FF
-
-# Verify a frame checksum
-pycbus checksum --verify 05 38 00 79 01 FF 50
+python -c "from pycbus.cli import main; main(['checksum', '05', '38', '00', '79', '01', 'FF'])"
 ```
 
 ## CI pipelines
@@ -170,22 +179,19 @@ Triggered when `pycbus/`, `tests/`, or `pyproject.toml` change.
 
 | Job | Steps |
 |---|---|
-| **Lint & type-check** | `ruff check` → `ruff format --check` → `mypy --strict` |
-| **Test (3.12)** | `pytest tests/ --cov` + upload coverage artifact |
-| **Test (3.13)** | `pytest tests/` |
-
-Integration tests (`test_config_flow.py`) are automatically skipped in
-this pipeline via `pytest.importorskip("homeassistant")`.
+| **Lint & type-check** | `ruff check` -> `ruff format --check` -> `mypy --strict` |
+| **Test (3.12)** | `pytest tests/lib/ tests/cli/ --cov` + upload coverage artifact |
+| **Test (3.13)** | `pytest tests/lib/ tests/cli/` |
 
 ### CI: HA integration (`ci-integration.yml`)
 
-Triggered when `custom_components/`, `tests/test_config_flow.py`, or
+Triggered when `custom_components/`, `tests/integration/`, or
 `tests/conftest.py` change.
 
 | Job | Steps |
 |---|---|
-| **Validate** | `ruff check` → `ruff format --check` → manifest.json schema check |
-| **Test** | `pytest tests/test_config_flow.py` with `pytest-homeassistant-custom-component` |
+| **Validate** | `ruff check` -> `ruff format --check` -> manifest.json schema check |
+| **Test** | `pytest tests/integration/` with `pytest-homeassistant-custom-component` |
 
 ## Versioning
 
@@ -201,24 +207,31 @@ Triggered when `custom_components/`, `tests/test_config_flow.py`, or
 
 ```
 tests/
-├── conftest.py              # Shared fixtures; HA fixtures only load
-│                            # when pytest-homeassistant-custom-component
-│                            # is installed
-├── test_checksum.py         # 4 tests  — checksum algorithm
-├── test_commands.py         # 4 tests  — SAL command builders
-├── test_constants.py        # 27 tests — enum values, ramp table, bitmasks
-├── test_model.py            # 15 tests — dataclass validation
-├── test_cli.py              # 16 tests — CLI build/checksum sub-commands
-├── test_config_flow.py      # 8 tests  — HA config flow (needs HA)
-└── test_protocol.py         # stub     — protocol state machine (planned)
+├── conftest.py                 # Root fixtures (shared)
+├── lib/                        # Library-only tests (150 tests)
+│   ├── conftest.py             # lib-specific fixtures
+│   ├── test_checksum.py        #   4 — checksum algorithm
+│   ├── test_commands.py        #  49 — SAL builders, parsers, measurement
+│   ├── test_constants.py       #  28 — enums, bitmasks, spec compliance
+│   ├── test_model.py           #  14 — dataclass validation
+│   ├── test_protocol.py        #  23 — protocol state machine + init
+│   └── test_transport.py       #  32 — TCP + serial + CRLF edge cases
+├── cli/                        # CLI tests (21 tests)
+│   └── test_cli.py             #  21 — build/checksum sub-commands
+└── integration/                # HA integration tests (65 tests)
+    ├── conftest.py             # HA fixtures (hass, enable_custom_integrations)
+    ├── test_config_flow.py     #   8 — config flow
+    ├── test_coordinator.py     #  22 — coordinator state + SAL dispatch
+    ├── test_light.py           #  16 — light entity
+    ├── test_switch.py          #  10 — switch entity
+    └── test_event.py           #   9 — event entity
 ```
 
-**Total: 74 tests** (66 library + 8 integration)
+**Total: 236 tests** (150 library + 21 CLI + 65 integration)
 
-The `conftest.py` uses a `try/except ImportError` guard so that HA-specific
-fixtures (`auto_enable_custom_integrations`, `mock_setup_entry`) are only
-defined when the HA test package is installed. This means library tests
-work with just `pip install -e ".[dev]"`.
+Library and CLI tests have no HA dependency — they work with just
+`pip install -e ".[dev]"`. Integration tests require
+`pytest-homeassistant-custom-component`.
 
 ## Code style guidelines
 
