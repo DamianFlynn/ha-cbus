@@ -133,20 +133,36 @@ class TestInterfaceOptions:
         assert InterfaceOption1.SMART == 0x10
 
     def test_option1_monitor(self) -> None:
-        assert InterfaceOption1.MONITOR == 0x40
+        assert InterfaceOption1.MONITOR == 0x20
 
     def test_option3_exstat(self) -> None:
         assert InterfaceOption3.EXSTAT == 0x08
 
     def test_our_init_option1(self) -> None:
-        """Our init sets CONNECT | SRCHK | SMART | MONITOR = 0x59."""
+        """Our init sets CONNECT|SRCHK|SMART|MONITOR|IDMON = 0x79."""
         value = (
             InterfaceOption1.CONNECT
             | InterfaceOption1.SRCHK
             | InterfaceOption1.SMART
             | InterfaceOption1.MONITOR
+            | InterfaceOption1.IDMON
         )
-        assert value == 0x59
+        assert value == 0x79
+
+    def test_option1_bit_positions_match_spec(self) -> None:
+        """Bit positions per Serial Interface User Guide, Table p58.
+
+        Bit 0 = CONNECT  (0x01)
+        Bit 3 = SRCHK    (0x08)
+        Bit 4 = SMART    (0x10)
+        Bit 5 = MONITOR  (0x20)
+        Bit 6 = IDMON    (0x40)
+        """
+        assert InterfaceOption1.CONNECT == 0x01  # bit 0
+        assert InterfaceOption1.SRCHK == 0x08  # bit 3
+        assert InterfaceOption1.SMART == 0x10  # bit 4
+        assert InterfaceOption1.MONITOR == 0x20  # bit 5
+        assert InterfaceOption1.IDMON == 0x40  # bit 6
 
     def test_our_init_option3(self) -> None:
         """Our init sets LOCAL_SAL | EXSTAT = 0x0A."""

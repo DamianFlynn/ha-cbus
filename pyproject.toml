@@ -36,9 +36,6 @@ dev = [
     "mypy>=1.10",
 ]
 
-[project.scripts]
-pycbus = "pycbus.cli:main"
-
 [project.urls]
 Homepage = "https://github.com/DamianFlynn/ha-cbus"
 Repository = "https://github.com/DamianFlynn/ha-cbus"
@@ -48,7 +45,8 @@ Issues = "https://github.com/DamianFlynn/ha-cbus/issues"
 include = ["pycbus*"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests/lib", "tests/integration"]
+pythonpath = ["."]
+testpaths = ["tests/lib", "tests/integration", "tests/cli"]
 asyncio_mode = "auto"
 
 [tool.mypy]

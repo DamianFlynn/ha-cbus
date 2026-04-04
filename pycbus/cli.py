@@ -49,12 +49,48 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import asyncio
+import logging
 import re
+import signal
 import sys
 
 from .checksum import checksum, verify
-from .commands import lighting_off, lighting_on, lighting_ramp, lighting_terminate_ramp
-from .constants import RAMP_DURATIONS, LightingCommand
+from .commands import (
+    lighting_off,
+    lighting_on,
+    lighting_ramp,
+    lighting_terminate_ramp,
+    parse_measurement_data,
+    parse_sal_event,
+)
+from .constants import (
+    RAMP_DURATIONS,
+    ApplicationId,
+    LightingCommand,
+)
+
+_LOGGER = logging.getLogger(__name__)
+
+# Human-readable application names for monitor display.
+_APP_NAMES: dict[int, str] = {
+    int(ApplicationId.LIGHTING): "LIGHTING",
+    int(ApplicationId.TRIGGER): "TRIGGER",
+    int(ApplicationId.ENABLE): "ENABLE",
+    int(ApplicationId.SECURITY): "SECURITY",
+    int(ApplicationId.METERING): "METERING",
+    int(ApplicationId.TEMPERATURE_BROADCAST): "TEMPERATURE",
+    int(ApplicationId.AIR_CONDITIONING): "AIRCON",
+    int(ApplicationId.MEASUREMENT): "MEASUREMENT",
+    int(ApplicationId.CLOCK): "CLOCK",
+}
+
+# Opcode names for known lighting commands.
+_LIGHTING_OPCODE_NAMES: dict[int, str] = {
+    int(LightingCommand.ON): "ON",
+    int(LightingCommand.OFF): "OFF",
+    int(LightingCommand.TERMINATE_RAMP): "TERMINATE",
+}
 
 # Matches digits/decimal with an optional 's'/'S' suffix (no sign — rates are positive).
 _RATE_RE = re.compile(r"^\d+(?:\.\d+)?[sS]?$")
@@ -214,6 +250,184 @@ def cmd_checksum(args: argparse.Namespace) -> int:
         return 0
 
 
+def cmd_send(args: argparse.Namespace) -> int:
+    """Execute the ``send`` sub-command -- connect and transmit a command.
+
+    Args:
+        args: Parsed CLI arguments.
+
+    Returns:
+        Exit code (0 = confirmed, 2 = connection error, 3 = rejected).
+    """
+    from .protocol import CbusProtocol
+    from .transport import TcpTransport
+
+    group = args.group
+    network = args.network
+
+    if args.action == "on":
+        cmd = lighting_on(group=group, network=network)
+        desc = f"Lighting ON -- group {group}"
+    elif args.action == "off":
+        cmd = lighting_off(group=group, network=network)
+        desc = f"Lighting OFF -- group {group}"
+    elif args.action == "ramp":
+        level = args.level
+        if args.rate:
+            try:
+                rate_seconds = _parse_rate_seconds(args.rate)
+            except ValueError as exc:
+                print(f"--rate: {exc}", file=sys.stderr)
+                return 1
+            rate = _find_closest_ramp(rate_seconds)
+        else:
+            rate = LightingCommand.RAMP_INSTANT
+        cmd = lighting_ramp(group=group, level=level, rate=rate, network=network)
+        desc = f"Lighting RAMP -- group {group} -> {level} ({rate.name})"
+    elif args.action == "terminate":
+        cmd = lighting_terminate_ramp(group=group, network=network)
+        desc = f"Lighting TERMINATE RAMP -- group {group}"
+    else:
+        print(f"Unknown action: {args.action}", file=sys.stderr)
+        return 1
+
+    async def _run() -> int:
+        transport = TcpTransport(host=args.host, port=args.port)
+        protocol = CbusProtocol(transport)
+
+        print(f"Connecting to {args.host}:{args.port}...")
+        try:
+            await protocol.connect()
+        except Exception as exc:
+            print(f"Connection failed: {exc}", file=sys.stderr)
+            return 2
+
+        print(f"Connected. State: {protocol.state.name}")
+        print(f"Sending:  {desc}")
+        print(f"Bytes:    {_format_hex(cmd)}")
+        print(f"Wire:     {_format_wire(cmd)}")
+
+        hex_payload = cmd.hex().upper().encode()
+        confirmed = await protocol.send_command(hex_payload)
+
+        if confirmed:
+            print("Result:   CONFIRMED (g)")
+        else:
+            print("Result:   REJECTED (!)")
+
+        await protocol.disconnect()
+        print("Disconnected.")
+        return 0 if confirmed else 3
+
+    return asyncio.run(_run())
+
+
+def cmd_monitor(args: argparse.Namespace) -> int:
+    """Execute the ``monitor`` sub-command -- connect and print SAL events.
+
+    Runs until interrupted with Ctrl+C.
+
+    Args:
+        args: Parsed CLI arguments.
+
+    Returns:
+        Exit code (0 = clean exit, 2 = connection error).
+    """
+    from .protocol import CbusProtocol
+    from .transport import TcpTransport
+
+    def _format_opcode(app_id: int, opcode: int) -> str:
+        """Return a human-readable name for a SAL opcode."""
+        if app_id == ApplicationId.LIGHTING:
+            name = _LIGHTING_OPCODE_NAMES.get(opcode)
+            if name:
+                return name
+            if opcode & 0x07 == 0x02:
+                # Ramp opcode — look up duration from RAMP_DURATIONS.
+                for duration, rate in RAMP_DURATIONS:
+                    if int(rate) == opcode:
+                        return f"RAMP_{duration}S"
+                return f"RAMP_0x{opcode:02X}"
+        elif app_id == ApplicationId.TRIGGER:
+            return "TRIGGER"
+        elif app_id == ApplicationId.ENABLE:
+            if opcode == 0x79:
+                return "ON"
+            if opcode == 0x01:
+                return "OFF"
+        return f"0x{opcode:02X}"
+
+    def _on_event(sal_bytes: bytes) -> None:
+        """Parse and display a SAL monitor event."""
+        raw_hex = sal_bytes.hex().upper()
+        event = parse_sal_event(sal_bytes)
+
+        if event is None:
+            print(f"  [RAW] {raw_hex}")
+            return
+
+        app_name = _APP_NAMES.get(event.app_id, f"APP_0x{event.app_id:02X}")
+
+        for cmd in event.commands:
+            op_name = _format_opcode(event.app_id, cmd.opcode)
+            parts = [
+                f"[{app_name}]",
+                f"src={event.source}",
+                op_name,
+                f"group={cmd.group}",
+            ]
+            if cmd.data is not None:
+                if event.app_id == ApplicationId.LIGHTING:
+                    parts.append(f"level={cmd.data}")
+                elif event.app_id == ApplicationId.TRIGGER:
+                    parts.append(f"action={cmd.data}")
+                else:
+                    parts.append(f"data={cmd.data}")
+            print(f"  {' '.join(parts)}")
+
+        # Measurement events carry sensor data — decode and display.
+        if event.app_id == ApplicationId.MEASUREMENT:
+            sal_data = sal_bytes[4:-1]  # strip 4-byte header + checksum
+            for m in parse_measurement_data(sal_data):
+                print(
+                    f"    -> dev={m.device_id} ch={m.channel}"
+                    f" {m.value:.2f} {m.unit_label}"
+                )
+
+        _LOGGER.debug("Raw: %s", raw_hex)
+
+    async def _run() -> int:
+        transport = TcpTransport(host=args.host, port=args.port)
+        protocol = CbusProtocol(transport)
+
+        print(f"Connecting to {args.host}:{args.port}...")
+        try:
+            await protocol.connect()
+        except Exception as exc:
+            print(f"Connection failed: {exc}", file=sys.stderr)
+            return 2
+
+        print(f"Connected. State: {protocol.state.name}")
+        print("Monitoring C-Bus traffic (Ctrl+C to stop)...\n")
+
+        protocol.on_event(_on_event)
+
+        stop = asyncio.Event()
+        loop = asyncio.get_running_loop()
+
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, stop.set)
+
+        await stop.wait()
+
+        print("\nDisconnecting...")
+        await protocol.disconnect()
+        print("Done.")
+        return 0
+
+    return asyncio.run(_run())
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the argparse parser for the pycbus CLI.
 
@@ -225,6 +439,20 @@ def build_parser() -> argparse.ArgumentParser:
         description="pycbus CLI — test C-Bus commands independently of Home Assistant.",
         epilog="See https://github.com/DamianFlynn/ha-cbus for full documentation.",
     )
+
+    # -- Global verbose flag --
+    parser.add_argument(
+        "--verbose",
+        "-v",
+        action="count",
+        default=0,
+        help=(
+            "Increase logging verbosity. "
+            "-v = INFO (state changes), "
+            "-vv = DEBUG (hex frames + parse detail)."
+        ),
+    )
+
     sub = parser.add_subparsers(dest="command", help="Available commands")
 
     # --- build sub-command ---
@@ -283,12 +511,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Verify the checksum instead of computing it.",
     )
 
-    # --- send sub-command (placeholder) ---
+    # --- send sub-command ---
     send_parser = sub.add_parser(
         "send",
         help="Connect to a CNI/PCI and send a command (requires live interface).",
     )
-    send_parser.add_argument("--host", type=str, help="CNI hostname or IP.")
+    send_parser.add_argument(
+        "--host", type=str, required=True, help="CNI hostname or IP."
+    )
     send_parser.add_argument("--port", type=int, default=10001, help="CNI port.")
     send_parser.add_argument(
         "action",
@@ -298,13 +528,22 @@ def build_parser() -> argparse.ArgumentParser:
     send_parser.add_argument("--group", "-g", type=int, required=True)
     send_parser.add_argument("--level", "-l", type=int, default=255)
     send_parser.add_argument("--rate", "-r", type=str, default=None)
+    send_parser.add_argument(
+        "--network",
+        "-n",
+        type=int,
+        default=0,
+        help="C-Bus network number (default: 0).",
+    )
 
-    # --- monitor sub-command (placeholder) ---
+    # --- monitor sub-command ---
     mon_parser = sub.add_parser(
         "monitor",
         help="Connect and print all received SAL events (requires live interface).",
     )
-    mon_parser.add_argument("--host", type=str, help="CNI hostname or IP.")
+    mon_parser.add_argument(
+        "--host", type=str, required=True, help="CNI hostname or IP."
+    )
     mon_parser.add_argument("--port", type=int, default=10001, help="CNI port.")
 
     return parser
@@ -322,6 +561,22 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
+    # Configure logging based on verbosity level.
+    # -v  → INFO  (protocol state changes, event summaries)
+    # -vv → DEBUG (hex frames, parse detail, transport bytes)
+    if args.verbose >= 2:
+        log_level = logging.DEBUG
+    elif args.verbose == 1:
+        log_level = logging.INFO
+    else:
+        log_level = logging.WARNING
+
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s %(name)s %(levelname)s %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
     if args.command is None:
         parser.print_help()
         return 0
@@ -331,17 +586,9 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "checksum":
         return cmd_checksum(args)
     elif args.command == "send":
-        print(
-            "send: not yet implemented.",
-            file=sys.stderr,
-        )
-        return 1
+        return cmd_send(args)
     elif args.command == "monitor":
-        print(
-            "monitor: not yet implemented.",
-            file=sys.stderr,
-        )
-        return 1
+        return cmd_monitor(args)
     else:
         parser.print_help()
         return 1

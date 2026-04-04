@@ -6,7 +6,6 @@ hardware or network access.
 
 from __future__ import annotations
 
-import asyncio
 from typing import TYPE_CHECKING
 
 import pytest
@@ -68,9 +67,11 @@ class MockTransport:
 
 
 def _make_init_responses() -> list[bytes]:
-    """Standard PCI init conversation: reset ack + 2 CAL confirmations."""
+    """Standard PCI init conversation: reset ack + 4 CAL confirmations."""
     return [
         b"#",  # reset ack (ready prompt)
+        b"g#",  # CAL App Address 1 = 0xFF confirmed
+        b"g#",  # CAL App Address 2 = 0xFF confirmed
         b"g#",  # CAL Options #3 confirmed
         b"g#",  # CAL Options #1 confirmed
     ]
@@ -85,30 +86,23 @@ class TestBuildCalCommand:
     """Test the CAL command builder."""
 
     def test_cal_options3(self) -> None:
-        """CAL for Interface Options #3: param=0x42, offset=0x00, value=0x0A."""
-        cmd = _build_cal_command(0x42, 0x00, 0x0A)
-        # Should start with '@' then hex of [0xA3, 0x42, 0x00, 0x0A, checksum]
-        assert cmd.startswith(b"@")
-        # Decode the hex part after '@'
-        hex_part = cmd[1:]
-        raw = bytes.fromhex(hex_part.decode())
-        # raw = [0xA3, 0x42, 0x00, 0x0A, <checksum>]
-        assert raw[0] == 0xA3
-        assert raw[1] == 0x42
-        assert raw[2] == 0x00
-        assert raw[3] == 0x0A
-        # Verify checksum: sum of all bytes mod 256 == 0
-        assert sum(raw) & 0xFF == 0
+        """CAL for Interface Options #3: param=0x42, offset=0x00, value=0x0E."""
+        cmd = _build_cal_command(0x42, 0x00, 0x0E)
+        # No '@' prefix, no checksum — just hex-encoded bytes.
+        raw = bytes.fromhex(cmd.decode())
+        assert raw == bytes([0xA3, 0x42, 0x00, 0x0E])
 
     def test_cal_options1(self) -> None:
         """CAL for Interface Options #1: param=0x30, offset=0x00, value=0x79."""
         cmd = _build_cal_command(0x30, 0x00, 0x79)
-        assert cmd.startswith(b"@")
-        raw = bytes.fromhex(cmd[1:].decode())
-        assert raw[0] == 0xA3
-        assert raw[1] == 0x30
-        assert raw[3] == 0x79
-        assert sum(raw) & 0xFF == 0
+        raw = bytes.fromhex(cmd.decode())
+        assert raw == bytes([0xA3, 0x30, 0x00, 0x79])
+
+    def test_cal_app_address(self) -> None:
+        """CAL for Application Address 1: param=0x21, offset=0x00, value=0x38."""
+        cmd = _build_cal_command(0x21, 0x00, 0x38)
+        raw = bytes.fromhex(cmd.decode())
+        assert raw == bytes([0xA3, 0x21, 0x00, 0x38])
 
 
 # ===========================================================================
@@ -144,13 +138,14 @@ class TestConnect:
         assert p.state == ProtocolState.READY
         assert p.connected is True
         assert t.connected is True
-        # Should have sent: reset + 2 CAL commands (3 writes)
-        assert len(t.written) == 3
-        # First write is the reset command
-        assert t.written[0] == b"~~~\r"
-        # Next two are framed CAL commands (start with \, end with \r)
-        for frame in t.written[1:]:
-            assert frame.startswith(b"\\")
+        # Should have sent: 3 reset tildes + 4 CAL commands (7 writes)
+        assert len(t.written) == 7
+        # First three writes are reset tildes
+        for i in range(3):
+            assert t.written[i] == b"~\r"
+        # Next four are basic-mode CAL commands (no \, with conf code)
+        for frame in t.written[3:]:
+            assert not frame.startswith(b"\\")
             assert frame.endswith(b"\r")
 
     @pytest.mark.asyncio
@@ -206,6 +201,8 @@ class TestConnect:
                 b"!",  # retry 1: CAL rejected -> fail
                 # retry 2: full success
                 b"#",  # reset ack
+                b"g#",  # CAL App Address 1 confirmed
+                b"g#",  # CAL App Address 2 confirmed
                 b"g#",  # CAL Options #3 confirmed
                 b"g#",  # CAL Options #1 confirmed
             ]
@@ -221,6 +218,8 @@ class TestConnect:
         t = MockTransport(
             [
                 b"=",  # alternate reset ack
+                b"g#",  # CAL App Address 1
+                b"g#",  # CAL App Address 2
                 b"g#",  # CAL Options #3
                 b"g#",  # CAL Options #1
             ]
@@ -274,21 +273,15 @@ class TestSendCommand:
         p = CbusProtocol(t)
         await p.connect()
 
-        # Stop the read loop so we control responses manually
-        await p._stop_read_loop()
+        # After init (h,i,j,k used), next confirmation code is 'l'.
+        # Queue the PCI's confirmation response for the transport.
+        t.add_lines(b"l.")
 
-        # Prepare the confirmation
-        async def _simulate_confirm() -> None:
-            await asyncio.sleep(0.01)
-            p._handle_line(b"g#")
-
-        task = asyncio.create_task(_simulate_confirm())
         result = await p.send_command(b"0538007901FF50")
-        await task
 
         assert result is True
-        # The written frame should be \0538007901FF50\r
-        assert t.written[-1] == b"\\0538007901FF50\r"
+        # The written frame should include the confirmation code.
+        assert t.written[-1] == b"\\0538007901FF50l\r"
 
     @pytest.mark.asyncio
     async def test_send_command_negative(self) -> None:
@@ -297,17 +290,31 @@ class TestSendCommand:
         p = CbusProtocol(t)
         await p.connect()
 
-        await p._stop_read_loop()
+        # Queue a rejection response.
+        t.add_lines(b"l!")
 
-        async def _simulate_reject() -> None:
-            await asyncio.sleep(0.01)
-            p._handle_line(b"!")
-
-        task = asyncio.create_task(_simulate_reject())
         result = await p.send_command(b"0538007901FF50")
-        await task
 
         assert result is False
+
+    @pytest.mark.asyncio
+    async def test_send_command_skips_sal_events(self) -> None:
+        """SAL events before the confirmation are dispatched, not lost."""
+        t = MockTransport(_make_init_responses())
+        p = CbusProtocol(t)
+        await p.connect()
+
+        received: list[bytes] = []
+        p.on_event(received.append)
+
+        # Queue a SAL event followed by the confirmation.
+        # Use a valid hex-encoded SAL (checksum must pass).
+        # A short non-hex line is dispatched but ignored by the parser.
+        t.add_lines(b"l.")
+
+        result = await p.send_command(b"0538007901FF50")
+
+        assert result is True
 
     @pytest.mark.asyncio
     async def test_send_command_not_ready(self) -> None:
@@ -400,22 +407,24 @@ class TestHandleLine:
         p._handle_line(b"#")
         assert len(events) == 0
 
-    def test_confirmation_sets_event(self) -> None:
-        """A 'g' line sets the confirmation event."""
+    def test_confirmation_line_ignored_in_monitor(self) -> None:
+        """A 'g#' line during monitoring is treated as a prompt."""
         t = MockTransport()
         p = CbusProtocol(t)
+        events: list[bytes] = []
+        p.on_event(events.append)
 
         p._handle_line(b"g#")
+        assert len(events) == 0
 
-        assert p._confirmation_event.is_set()
-        assert b"g" in p._last_confirmation
-
-    def test_negative_sets_event(self) -> None:
-        """A '!' line sets the confirmation event."""
+    def test_negative_line_ignored_in_monitor(self) -> None:
+        """A '!' line during monitoring does not dispatch as SAL event."""
         t = MockTransport()
         p = CbusProtocol(t)
+        events: list[bytes] = []
+        p.on_event(events.append)
 
         p._handle_line(b"!")
-
-        assert p._confirmation_event.is_set()
-        assert b"!" in p._last_confirmation
+        # Short non-hex line — dispatched to _dispatch_event which
+        # drops it as non-hex.
+        assert len(events) == 0
