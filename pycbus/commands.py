@@ -1,42 +1,17 @@
-"""SAL command builders and status-request builders for C-Bus.
+"""SAL shared infrastructure and backward-compatible re-exports.
 
-This module constructs the raw byte sequences for *Short Application Layer*
-(SAL) commands that are sent to the C-Bus PCI/CNI.  Each builder returns
-the complete payload **including** the trailing checksum byte, ready to be
-hex-encoded and framed for transmission.
+This module provides the **shared** SAL infrastructure that all
+applications use:
 
-It also provides a **status request** builder for querying the current
-level of all group addresses in a given application.  The PCI responds
-with a binary (or extended-binary) status reply — see
-:func:`parse_status_reply` for decoding.
+- :class:`SalCommand` / :class:`SalEvent` — parsed monitor event models
+- :func:`parse_sal_event` — generic SAL monitor event parser
+- :func:`status_request` / :func:`parse_status_reply` — group-level query
+- :func:`is_status_reply` — reply detection
 
-Framing (done by the transport / protocol layer, not here)::
-
-    Wire format:   \\<hex-encoded payload>\\r
-    Example ON:    \\0538007901FF50\\r
-
-Command structure (point-to-multipoint, broadcast)::
-
-    Byte 0:  0x05     — DAT (broadcast)
-    Byte 1:  <app>    — Application ID (e.g. 0x38 = Lighting)
-    Byte 2:  <net>    — Network number (0x00 = default)
-    Byte 3:  <opcode> — SAL opcode (ON / OFF / RAMP_* / TERMINATE_RAMP)
-    Byte 4:  <group>  — Target group address (0-255)
-    Byte 5:  [level]  — Optional target level (0x00-0xFF), present for ON/RAMP
-    Byte 6:  <chk>    — Two's-complement checksum
-
-Status request (short form, point-to-multipoint)::
-
-    Byte 0:  0xFF     — short-form PM header
-    Byte 1:  <app>    — Application ID
-    Byte 2:  0x73     — binary status request opcode
-    Byte 3:  0x00     — block number (0, 1, or 2)
-    Byte 4:  <chk>    — checksum
-
-References:
-    - *C-Bus Serial Interface User Guide*, §4.3.3 — Point-to-Multipoint
-    - *C-Bus Serial Interface User Guide*, §4.3.3.2 — Status Requests
-    - *Chapter 02 — C-Bus Lighting Application*, §2.6 — SAL Commands
+Per-application command builders have moved to
+:mod:`pycbus.applications` sub-modules.  For backward compatibility,
+the old top-level names (``lighting_on``, ``enable_off``, etc.) are
+re-exported here.
 
 Usage::
 
@@ -44,224 +19,56 @@ Usage::
     >>> from pycbus.constants import LightingCommand
     >>> lighting_on(group=1).hex()
     '0538007901ff50'
-    >>> lighting_ramp(group=5, level=128, rate=LightingCommand.RAMP_4S).hex()
-    '0538000a058034'
 """
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from collections.abc import Callable
-
-from .checksum import checksum
-from .constants import (
-    ApplicationId,
-    EnableCommand,
-    LightingCommand,
-    PointToMultipointDAT,
-    TriggerCommand,
+from .applications import get_sal_command_size
+from .applications.enable import off as enable_off
+from .applications.enable import on as enable_on
+from .applications.lighting import off as lighting_off
+from .applications.lighting import on as lighting_on
+from .applications.lighting import ramp as lighting_ramp
+from .applications.lighting import (
+    terminate_ramp as lighting_terminate_ramp,
 )
+from .applications.measurement import (
+    MeasurementData,
+    parse_measurement_data,
+)
+from .applications.trigger import event as trigger_event
+from .checksum import checksum
+from .constants import PointToMultipointDAT
+
+__all__ = [
+    "MeasurementData",
+    "SalCommand",
+    "SalEvent",
+    "enable_off",
+    "enable_on",
+    "is_status_reply",
+    "lighting_off",
+    "lighting_on",
+    "lighting_ramp",
+    "lighting_terminate_ramp",
+    "parse_measurement_data",
+    "parse_sal_event",
+    "parse_status_reply",
+    "status_request",
+    "trigger_event",
+]
 
 _LOGGER = logging.getLogger(__name__)
 
 
 def _build_pm_command(*payload_bytes: int) -> bytes:
-    """Build a point-to-multipoint command with checksum.
-
-    This is the shared low-level builder.  It concatenates the payload
-    bytes, computes the two's-complement checksum, and appends it.
-
-    The caller is responsible for hex-encoding the result and wrapping it
-    with ``\\`` prefix and ``\\r`` suffix before writing to the transport.
-
-    Args:
-        *payload_bytes: Individual byte values (0-255) forming the
-            command payload *without* the checksum.
-
-    Returns:
-        The complete command bytes including the trailing checksum.
-    """
+    """Build a point-to-multipoint command with checksum."""
     raw = bytes(payload_bytes)
     cs = checksum(raw)
     return raw + bytes([cs])
-
-
-def lighting_on(group: int, network: int = 0) -> bytes:
-    """Build a Lighting ON command (group → 0xFF).
-
-    Immediately sets the target group to full brightness (level 0xFF).
-
-    Args:
-        group:   Target group address (0-255).
-        network: C-Bus network number (default 0 = the connected network).
-
-    Returns:
-        7-byte command: DAT + app + net + ON + group + 0xFF + checksum.
-    """
-    return _build_pm_command(
-        PointToMultipointDAT.BROADCAST,
-        ApplicationId.LIGHTING,
-        network,
-        LightingCommand.ON,
-        group,
-        0xFF,
-    )
-
-
-def lighting_off(group: int, network: int = 0) -> bytes:
-    """Build a Lighting OFF command (group → 0x00).
-
-    Immediately sets the target group to zero (off).  Unlike a ramp-to-zero,
-    this is instantaneous with no fade.
-
-    Args:
-        group:   Target group address (0-255).
-        network: C-Bus network number (default 0).
-
-    Returns:
-        6-byte command: DAT + app + net + OFF + group + checksum.
-        (OFF does not include a level byte.)
-    """
-    return _build_pm_command(
-        PointToMultipointDAT.BROADCAST,
-        ApplicationId.LIGHTING,
-        network,
-        LightingCommand.OFF,
-        group,
-    )
-
-
-def lighting_ramp(
-    group: int,
-    level: int,
-    rate: LightingCommand = LightingCommand.RAMP_INSTANT,
-    network: int = 0,
-) -> bytes:
-    """Build a Lighting RAMP command (group → level at rate).
-
-    Fades the target group to *level* (0-255) over the duration encoded
-    in *rate*.  Use :data:`pycbus.constants.RAMP_DURATIONS` to find the
-    closest ramp opcode for an arbitrary duration in seconds.
-
-    Args:
-        group:   Target group address (0-255).
-        level:   Target brightness (0x00 = off, 0xFF = full).
-        rate:    Ramp-rate opcode (default: RAMP_INSTANT = 0s fade).
-        network: C-Bus network number (default 0).
-
-    Returns:
-        7-byte command: DAT + app + net + RAMP_* + group + level + checksum.
-    """
-    return _build_pm_command(
-        PointToMultipointDAT.BROADCAST,
-        ApplicationId.LIGHTING,
-        network,
-        rate,
-        group,
-        level & 0xFF,
-    )
-
-
-def lighting_terminate_ramp(group: int, network: int = 0) -> bytes:
-    """Build a TERMINATE RAMP command for a group.
-
-    Stops any running fade and holds the group at its current level.
-    Useful for implementing a "stop" button during long fades.
-
-    Args:
-        group:   Target group address (0-255).
-        network: C-Bus network number (default 0).
-
-    Returns:
-        6-byte command: DAT + app + net + TERMINATE_RAMP + group + checksum.
-    """
-    return _build_pm_command(
-        PointToMultipointDAT.BROADCAST,
-        ApplicationId.LIGHTING,
-        network,
-        LightingCommand.TERMINATE_RAMP,
-        group,
-    )
-
-
-# ------------------------------------------------------------------
-# Enable Control (app 203 / 0xCB)
-# ------------------------------------------------------------------
-
-
-def enable_on(group: int, network: int = 0) -> bytes:
-    """Build an Enable ON command (group -> 0xFF).
-
-    Immediately enables the target group.
-
-    Args:
-        group:   Target group address (0-255).
-        network: C-Bus network number (default 0).
-
-    Returns:
-        7-byte command: DAT + app + net + ON + group + 0xFF + checksum.
-    """
-    return _build_pm_command(
-        PointToMultipointDAT.BROADCAST,
-        ApplicationId.ENABLE,
-        network,
-        EnableCommand.ON,
-        group,
-        0xFF,
-    )
-
-
-def enable_off(group: int, network: int = 0) -> bytes:
-    """Build an Enable OFF command (group -> 0x00).
-
-    Immediately disables the target group.
-
-    Args:
-        group:   Target group address (0-255).
-        network: C-Bus network number (default 0).
-
-    Returns:
-        6-byte command: DAT + app + net + OFF + group + checksum.
-    """
-    return _build_pm_command(
-        PointToMultipointDAT.BROADCAST,
-        ApplicationId.ENABLE,
-        network,
-        EnableCommand.OFF,
-        group,
-    )
-
-
-# ------------------------------------------------------------------
-# Trigger Control (app 202 / 0xCA)
-# ------------------------------------------------------------------
-
-
-def trigger_event(group: int, action: int = 0, network: int = 0) -> bytes:
-    """Build a Trigger event command.
-
-    Fires a trigger on the specified group with the given action selector.
-
-    Args:
-        group:   Target trigger group (0-255).
-        action:  Action selector byte (0-255, default 0).
-        network: C-Bus network number (default 0).
-
-    Returns:
-        7-byte command: DAT + app + net + opcode + group + action + checksum.
-    """
-    return _build_pm_command(
-        PointToMultipointDAT.BROADCAST,
-        ApplicationId.TRIGGER,
-        network,
-        TriggerCommand.TRIGGER_MIN,
-        group,
-        action & 0xFF,
-    )
 
 
 # ------------------------------------------------------------------
@@ -528,55 +335,7 @@ class SalEvent:
     commands: tuple[SalCommand, ...]
 
 
-# -- Application-specific command size functions --
-#
-# Each function takes an opcode and returns the total number of bytes
-# that SAL command consumes (including the opcode byte itself).
-# Modelled after micolous/cbus _SAL_HANDLERS approach.
-
-
-def _lighting_sal_size(opcode: int) -> int:
-    """Size of a lighting SAL command.
-
-    Ramp opcodes (low 3 bits == 0b010) consume 3 bytes: opcode + group
-    + level.  All other opcodes (ON, OFF, TERMINATE_RAMP) consume 2
-    bytes: opcode + group.
-
-    Reference: micolous/cbus common.py LIGHT_RAMP_COMMANDS set.
-    """
-    if opcode & 0x07 == 0x02:
-        return 3  # ramp: opcode + group + level
-    return 2  # ON / OFF / TERMINATE_RAMP: opcode + group
-
-
-def _trigger_sal_size(_opcode: int) -> int:
-    """Trigger commands are always 3 bytes: opcode + group + action."""
-    return 3
-
-
-def _enable_sal_size(_opcode: int) -> int:
-    """Enable commands are always 2 bytes: opcode + group."""
-    return 2
-
-
-# Registry mapping application IDs to their SAL size function.
-# Unknown applications fall back to the lighting pattern (most common).
-_APP_SAL_SIZE: dict[int, Callable[[int], int]] = {
-    ApplicationId.LIGHTING: _lighting_sal_size,
-    ApplicationId.TRIGGER: _trigger_sal_size,
-    ApplicationId.ENABLE: _enable_sal_size,
-}
-
-
-def _get_sal_command_size(app_id: int, opcode: int) -> int:
-    """Determine the byte count for a SAL command in a given application.
-
-    Falls back to the lighting pattern for unknown applications, which
-    is safe because the ramp-detection heuristic (low 3 bits == 0b010)
-    is used across most C-Bus applications that support dimming.
-    """
-    size_fn = _APP_SAL_SIZE.get(app_id, _lighting_sal_size)
-    return size_fn(opcode)
+# -- SAL Event Parsing --
 
 
 def parse_sal_event(data: bytes) -> SalEvent | None:
@@ -630,7 +389,7 @@ def parse_sal_event(data: bytes) -> SalEvent | None:
 
     while pos < len(sal_data):
         opcode = sal_data[pos]
-        size = _get_sal_command_size(app_id, opcode)
+        size = get_sal_command_size(app_id, opcode)
 
         if pos + size > len(sal_data):
             _LOGGER.warning(

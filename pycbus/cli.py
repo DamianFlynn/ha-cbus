@@ -61,6 +61,7 @@ from .commands import (
     lighting_on,
     lighting_ramp,
     lighting_terminate_ramp,
+    parse_measurement_data,
     parse_sal_event,
 )
 from .constants import (
@@ -80,6 +81,7 @@ _APP_NAMES: dict[int, str] = {
     int(ApplicationId.METERING): "METERING",
     int(ApplicationId.TEMPERATURE_BROADCAST): "TEMPERATURE",
     int(ApplicationId.AIR_CONDITIONING): "AIRCON",
+    int(ApplicationId.MEASUREMENT): "MEASUREMENT",
     int(ApplicationId.CLOCK): "CLOCK",
 }
 
@@ -382,6 +384,15 @@ def cmd_monitor(args: argparse.Namespace) -> int:
                 else:
                     parts.append(f"data={cmd.data}")
             print(f"  {' '.join(parts)}")
+
+        # Measurement events carry sensor data — decode and display.
+        if event.app_id == ApplicationId.MEASUREMENT:
+            sal_data = sal_bytes[4:-1]  # strip 4-byte header + checksum
+            for m in parse_measurement_data(sal_data):
+                print(
+                    f"    -> dev={m.device_id} ch={m.channel}"
+                    f" {m.value:.2f} {m.unit_label}"
+                )
 
         _LOGGER.debug("Raw: %s", raw_hex)
 

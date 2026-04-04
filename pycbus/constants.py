@@ -39,24 +39,24 @@ class ApplicationId(IntEnum):
     Phase 2+: SECURITY, TELEPHONY, and application-specific chapters.
     """
 
-    LIGHTING = 56  # 0x38 — Chapter 02
-    TRIGGER = 202  # 0xCA — Chapter 07
-    ENABLE = 203  # 0xCB — Chapter 08
-    SECURITY = 208  # 0xD0 — Chapter 05
-    METERING = 228  # 0xE4 — Chapter 06
-    TEMPERATURE_BROADCAST = 25  # 0x19 — Chapter 09
-    VENTILATION = 112  # 0x70 — Chapter 10
-    ACCESS_CONTROL = 209  # 0xD1 — Chapter 11
-    MEDIA_TRANSPORT = 199  # 0xC7 — Chapter 21
-    CLOCK = 223  # 0xDF — Chapter 23
-    TELEPHONY = 224  # 0xE0 — Chapter 24
-    AIR_CONDITIONING = 172  # 0xAC — Chapter 25
-    IRRIGATION = ENABLE  # 0xCB - Chapter 26 (alias: shares Enable block)
-    MEASUREMENT = 232  # 0xE8 — Chapter 28
-    POOLS_SPAS = 200  # 0xC8 — Chapter 31
-    ERROR_REPORTING = 206  # 0xCE — Chapter 34
-    HVAC_ACTUATOR = 105  # 0x69 — Chapter 36
-    HEATING_LEGACY = 136  # 0x88 — from HOME.xml (pre-standard)
+    LIGHTING = 0x38  # 56 — Chapter 02
+    TRIGGER = 0xCA  # 202 — Chapter 07
+    ENABLE = 0xCB  # 203 — Chapter 08
+    SECURITY = 0xD0  # 208 — Chapter 05
+    METERING = 0xD1  # 209 — Chapter 06
+    TEMPERATURE_BROADCAST = 0x19  # 25 — Chapter 09
+    VENTILATION = 0x70  # 112 — Chapter 10
+    ACCESS_CONTROL = 0xD5  # 213 — Chapter 11
+    MEDIA_TRANSPORT = 0xC0  # 192 — Chapter 21
+    CLOCK = 0xDF  # 223 — Chapter 23
+    TELEPHONY = 0xE0  # 224 — Chapter 24
+    AIR_CONDITIONING = 0xAC  # 172 — Chapter 25
+    IRRIGATION = 0x71  # 113 — Chapter 26
+    MEASUREMENT = 0xE4  # 228 — Chapter 28
+    POOLS_SPAS = 0x72  # 114 — Chapter 31
+    ERROR_REPORTING = 0xCE  # 206 — Chapter 34
+    HVAC_ACTUATOR = 0x73  # 115 — Chapter 36
+    HEATING_LEGACY = 0x88  # 136 — from HOME.xml (pre-standard)
 
 
 class PointToMultipointDAT(IntEnum):
@@ -186,6 +186,109 @@ class TriggerCommand(IntEnum):
 
     TRIGGER_MIN = 0x02
     TRIGGER_MAX = 0x79
+
+
+class MeasurementCommand(IntEnum):
+    """SAL command codes for the Measurement application (app 0xE4).
+
+    The command byte encodes both the command code (bits 4-7) and
+    the argument count (bits 0-2).  Only one command is defined.
+
+    Reference: *Chapter 28 — C-Bus Measurement Application*, §28.4.
+    """
+
+    MEASUREMENT_EVENT = 0x0E  # %0 0001 110 — 6 argument bytes
+
+
+class MeasurementUnit(IntEnum):
+    """Unit codes for Measurement Application data.
+
+    Each code identifies the physical quantity being measured.
+
+    Reference: *Chapter 28 — C-Bus Measurement Application*, §28.5.1.2.
+    """
+
+    CELSIUS = 0x00
+    AMPS = 0x01
+    ANGLE_DEGREES = 0x02
+    COULOMB = 0x03
+    BOOLEAN = 0x04
+    FARADS = 0x05
+    HENRYS = 0x06
+    HERTZ = 0x07
+    JOULES = 0x08
+    KATAL = 0x09
+    KG_PER_M3 = 0x0A
+    KILOGRAMS = 0x0B
+    LITRES = 0x0C
+    LITRES_PER_HOUR = 0x0D
+    LITRES_PER_MINUTE = 0x0E
+    LITRES_PER_SECOND = 0x0F
+    LUX = 0x10
+    METRES = 0x11
+    METRES_PER_MINUTE = 0x12
+    METRES_PER_SECOND = 0x13
+    METRES_PER_SECOND2 = 0x14
+    MOLE = 0x15
+    NEWTON_METRE = 0x16
+    NEWTONS = 0x17
+    OHMS = 0x18
+    PASCAL = 0x19
+    PERCENT = 0x1A
+    DECIBELS = 0x1B
+    PPM = 0x1C
+    RPM = 0x1D
+    SECONDS = 0x1E
+    MINUTES = 0x1F
+    HOURS = 0x20
+    SIEVERTS = 0x21
+    STERADIAN = 0x22
+    TESLA = 0x23
+    VOLTS = 0x24
+    WATT_HOURS = 0x25
+    WATTS = 0x26
+    WEBERS = 0x27
+    NO_UNITS = 0xFE
+    CUSTOM = 0xFF
+
+
+# Human-readable labels for measurement units.
+MEASUREMENT_UNIT_LABELS: dict[int, str] = {
+    MeasurementUnit.CELSIUS: "°C",
+    MeasurementUnit.AMPS: "A",
+    MeasurementUnit.ANGLE_DEGREES: "°",
+    MeasurementUnit.HERTZ: "Hz",
+    MeasurementUnit.JOULES: "J",
+    MeasurementUnit.KG_PER_M3: "kg/m³",
+    MeasurementUnit.KILOGRAMS: "kg",
+    MeasurementUnit.LITRES: "L",
+    MeasurementUnit.LITRES_PER_HOUR: "L/h",
+    MeasurementUnit.LITRES_PER_MINUTE: "L/min",
+    MeasurementUnit.LITRES_PER_SECOND: "L/s",
+    MeasurementUnit.LUX: "lx",
+    MeasurementUnit.METRES: "m",
+    MeasurementUnit.METRES_PER_MINUTE: "m/min",
+    MeasurementUnit.METRES_PER_SECOND: "m/s",
+    MeasurementUnit.METRES_PER_SECOND2: "m/s²",
+    MeasurementUnit.NEWTONS: "N",
+    MeasurementUnit.NEWTON_METRE: "N·m",
+    MeasurementUnit.OHMS: "Ω",
+    MeasurementUnit.PASCAL: "Pa",
+    MeasurementUnit.PERCENT: "%",
+    MeasurementUnit.DECIBELS: "dB",
+    MeasurementUnit.PPM: "ppm",
+    MeasurementUnit.RPM: "rpm",
+    MeasurementUnit.SECONDS: "s",
+    MeasurementUnit.MINUTES: "min",
+    MeasurementUnit.HOURS: "h",
+    MeasurementUnit.TESLA: "T",
+    MeasurementUnit.VOLTS: "V",
+    MeasurementUnit.WATT_HOURS: "Wh",
+    MeasurementUnit.WATTS: "W",
+    MeasurementUnit.WEBERS: "Wb",
+    MeasurementUnit.NO_UNITS: "",
+    MeasurementUnit.CUSTOM: "custom",
+}
 
 
 class ConfirmationCode(IntEnum):

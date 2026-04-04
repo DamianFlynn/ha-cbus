@@ -13,13 +13,17 @@ Reference: *Chapter 02 — C-Bus Lighting Application*, §2.6.
 
 from __future__ import annotations
 
+import pytest
+
 from pycbus.checksum import verify
 from pycbus.commands import (
+    MeasurementData,
     enable_off,
     enable_on,
     lighting_off,
     lighting_on,
     lighting_ramp,
+    parse_measurement_data,
     parse_sal_event,
     parse_status_reply,
     status_request,
@@ -481,3 +485,139 @@ class TestParseSalEvent:
             event.source = 99  # type: ignore[misc]
         with __import__("pytest").raises(AttributeError):
             event.commands[0].group = 99  # type: ignore[misc]
+
+
+# ===========================================================================
+# Measurement Application (app 228 / 0xE4)
+# ===========================================================================
+#
+# Wire format: 0x0E <device_id> <channel> <units> <multiplier> <msb> <lsb>
+# Reference: Chapter 28 — C-Bus Measurement Application.
+
+
+class TestMeasurementParser:
+    """Tests for parse_measurement_data and MeasurementData."""
+
+    def test_basic_lux_reading(self) -> None:
+        """Simple positive Lux reading: 500 lx (raw=500, mult=0)."""
+        # opcode=0x0E, dev=1, ch=0, unit=0x10(Lux), mult=0, value=500
+        sal = bytes([0x0E, 0x01, 0x00, 0x10, 0x00, 0x01, 0xF4])
+        results = parse_measurement_data(sal)
+        assert len(results) == 1
+        m = results[0]
+        assert m.device_id == 1
+        assert m.channel == 0
+        assert m.unit_code == 0x10
+        assert m.multiplier == 0
+        assert m.raw_value == 500
+        assert m.value == 500.0
+        assert m.unit_label == "lx"
+
+    def test_negative_multiplier(self) -> None:
+        """Multiplier -2: raw=1234 x 10^-2 = 12.34."""
+        # mult=0xFE = -2 in two's complement
+        sal = bytes([0x0E, 0x05, 0x01, 0x10, 0xFE, 0x04, 0xD2])
+        results = parse_measurement_data(sal)
+        assert len(results) == 1
+        m = results[0]
+        assert m.multiplier == -2
+        assert m.raw_value == 1234
+        assert m.value == pytest.approx(12.34)
+
+    def test_positive_multiplier(self) -> None:
+        """Multiplier +2: raw=15 x 10^2 = 1500."""
+        sal = bytes([0x0E, 0x02, 0x00, 0x10, 0x02, 0x00, 0x0F])
+        results = parse_measurement_data(sal)
+        assert len(results) == 1
+        assert results[0].value == 1500.0
+
+    def test_negative_raw_value(self) -> None:
+        """Signed 16-bit: raw=-10 (0xFFF6), mult=0 → value=-10."""
+        sal = bytes([0x0E, 0x03, 0x00, 0x11, 0x00, 0xFF, 0xF6])
+        results = parse_measurement_data(sal)
+        assert len(results) == 1
+        m = results[0]
+        assert m.raw_value == -10
+        assert m.value == -10.0
+
+    def test_zero_value(self) -> None:
+        """Zero reading."""
+        sal = bytes([0x0E, 0x01, 0x00, 0x10, 0x00, 0x00, 0x00])
+        results = parse_measurement_data(sal)
+        assert len(results) == 1
+        assert results[0].raw_value == 0
+        assert results[0].value == 0.0
+
+    def test_max_positive_value(self) -> None:
+        """Maximum positive 16-bit: raw=32767 (0x7FFF)."""
+        sal = bytes([0x0E, 0x01, 0x00, 0x10, 0x00, 0x7F, 0xFF])
+        results = parse_measurement_data(sal)
+        assert len(results) == 1
+        assert results[0].raw_value == 32767
+
+    def test_min_negative_value(self) -> None:
+        """Minimum negative 16-bit: raw=-32768 (0x8000)."""
+        sal = bytes([0x0E, 0x01, 0x00, 0x10, 0x00, 0x80, 0x00])
+        results = parse_measurement_data(sal)
+        assert len(results) == 1
+        assert results[0].raw_value == -32768
+
+    def test_concatenated_commands(self) -> None:
+        """Two measurement events concatenated in one SAL packet."""
+        cmd1 = bytes([0x0E, 0x01, 0x00, 0x10, 0x00, 0x01, 0xF4])  # 500 lx
+        cmd2 = bytes([0x0E, 0x01, 0x01, 0x00, 0x00, 0x00, 0x19])  # 25 °C
+        sal = cmd1 + cmd2
+        results = parse_measurement_data(sal)
+        assert len(results) == 2
+        assert results[0].channel == 0
+        assert results[0].unit_code == 0x10  # Lux
+        assert results[0].raw_value == 500
+        assert results[1].channel == 1
+        assert results[1].unit_code == 0x00  # °C
+        assert results[1].raw_value == 25
+
+    def test_truncated_data_returns_partial(self) -> None:
+        """Truncated command at end should return what was parsed so far."""
+        complete = bytes([0x0E, 0x01, 0x00, 0x10, 0x00, 0x01, 0xF4])
+        truncated = bytes([0x0E, 0x01, 0x00])  # incomplete
+        sal = complete + truncated
+        results = parse_measurement_data(sal)
+        assert len(results) == 1  # only the complete one
+        assert results[0].raw_value == 500
+
+    def test_empty_data(self) -> None:
+        """Empty input returns empty list."""
+        assert parse_measurement_data(b"") == []
+
+    def test_unknown_command_skipped(self) -> None:
+        """Non-MEASUREMENT_EVENT command code is skipped."""
+        # opcode 0x06: command_code=0 (not 1), arg_count=6
+        sal = bytes([0x06, 0x01, 0x00, 0x10, 0x00, 0x01, 0xF4])
+        results = parse_measurement_data(sal)
+        assert len(results) == 0
+
+    def test_unknown_unit_code_label(self) -> None:
+        """Unknown unit code falls back to hex label."""
+        sal = bytes([0x0E, 0x01, 0x00, 0xEE, 0x00, 0x00, 0x01])
+        results = parse_measurement_data(sal)
+        assert len(results) == 1
+        assert results[0].unit_label == "unit_0xEE"
+
+    def test_temperature_celsius_unit(self) -> None:
+        """Unit 0x00 = degrees Celsius."""
+        sal = bytes([0x0E, 0x01, 0x00, 0x00, 0xFE, 0x09, 0xC4])
+        results = parse_measurement_data(sal)
+        assert len(results) == 1
+        m = results[0]
+        assert m.unit_code == 0x00
+        assert m.unit_label == "°C"
+        # raw=2500, mult=-2 → 25.00
+        assert m.value == pytest.approx(25.0)
+
+    def test_measurement_data_frozen(self) -> None:
+        """MeasurementData should be immutable."""
+        m = MeasurementData(
+            device_id=1, channel=0, unit_code=0x10, multiplier=0, raw_value=100
+        )
+        with pytest.raises(AttributeError):
+            m.device_id = 2  # type: ignore[misc]
