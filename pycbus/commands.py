@@ -52,6 +52,10 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 from .checksum import checksum
 from .constants import (
@@ -495,7 +499,7 @@ def _enable_sal_size(_opcode: int) -> int:
 
 # Registry mapping application IDs to their SAL size function.
 # Unknown applications fall back to the lighting pattern (most common).
-_APP_SAL_SIZE = {
+_APP_SAL_SIZE: dict[int, Callable[[int], int]] = {
     ApplicationId.LIGHTING: _lighting_sal_size,
     ApplicationId.TRIGGER: _trigger_sal_size,
     ApplicationId.ENABLE: _enable_sal_size,
